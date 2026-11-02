@@ -3,6 +3,6 @@ node_modules/
 .next/
 .env*
 !.env.example
-data/
+/data/
 *.tsbuildinfo
 test-results/
