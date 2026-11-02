@@ -23,10 +23,10 @@ async function ready() {
   await initialized;
   return db;
 }
-export async function getData() {
+export async function getData(range?: { start: string; end: string }) {
   const db = await ready();
   const [entries, settings] = await Promise.all([
-    db.execute("SELECT * FROM entries ORDER BY date DESC, created_at DESC"),
+    db.execute(range ? { sql: "SELECT * FROM entries WHERE date >= ? AND date <= ? ORDER BY date DESC, created_at DESC", args: [range.start, range.end] } : "SELECT * FROM entries ORDER BY date DESC, created_at DESC"),
     db.execute("SELECT payload FROM settings WHERE id = 1")
   ]);
   return {

@@ -22,7 +22,7 @@ In PowerShell use `Copy-Item .env.example .env.local`. Open http://127.0.0.1:300
 - Manual food logging with calories, protein, carbs, and fat, plus editable reference goals.
 - Body weight history and sparkline. Units are selected in preferences; conversion of existing history is not supported, so switching units is blocked while weight/lifting entries exist.
 - Past-day logging, reflections, deletion of individual records, and JSON backup export.
-- Optional stateless AI companion through OpenAI's Responses API. Keys stay server-side. Only the message you submit is sent, without your logs. Responses are not stored in the app; `store: false` is sent to OpenAI, whose own data policies still apply.
+- Optional stateless AI companion through OpenAI's Responses API. Keys stay server-side. When “Use recent logs” is enabled, each message includes a server-built summary of the last 14 calendar days, daily check-ins, logged nutrition totals, training, weight, urge intensity, goals, your reason, and up to 12 recent reflection/urge notes (300 characters each). Up to 40 recent exercise entries provide sets, reps, and load. The companion can compare the two logged weeks, while treating unlogged days as unknown and partial food logs as partial. Turn the switch off to send only your message. The context preview shows the date window and record counts; no logs are sent until you press Send. The browser supplies its local reference date to avoid shifting the window at midnight UTC. No prior chat history is included. Responses are not stored in the app; `store: false` is sent to OpenAI, whose own data policies still apply.
 - Password sign-in, signed seven-day HttpOnly session cookie, and same-origin checks for writes.
 
 ## Deploy to Vercel with hosted SQLite
