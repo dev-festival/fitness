@@ -1,5 +1,7 @@
 import { createClient, type Client } from "@libsql/client";
 import { mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { buildHistorySnapshots } from "./history";
 import { defaults, type Entry, type EntryInput, type Settings } from "./model";
 
 let client: Client | undefined;
@@ -18,7 +20,8 @@ async function ready() {
     "CREATE TABLE IF NOT EXISTS entries (id TEXT PRIMARY KEY, kind TEXT NOT NULL, date TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS entries_date ON entries(date)",
     "CREATE UNIQUE INDEX IF NOT EXISTS one_checkin_per_day ON entries(date) WHERE kind = 'checkin'",
-    "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id = 1), payload TEXT NOT NULL)"
+    "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id = 1), payload TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS history_snapshots (period_start TEXT PRIMARY KEY, source_hash TEXT NOT NULL, payload TEXT NOT NULL, updated_at TEXT NOT NULL)"
   ], "write").then(() => {}).catch(error => { initialized = undefined; throw error; });
   await initialized;
   return db;
@@ -57,4 +60,21 @@ export async function saveSettings(settings: Settings) {
     if (weights.rows.length) throw new Error("Cannot change units while weight records exist");
   }
   await db.execute({ sql: "INSERT INTO settings (id,payload) VALUES (1,?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload", args: [JSON.stringify(settings)] });
+}
+
+export async function syncHistorySnapshots(entries: Entry[], referenceDate: string) {
+  const db = await ready();
+  const snapshots = buildHistorySnapshots(entries, referenceDate);
+  const existing = await db.execute("SELECT period_start, source_hash FROM history_snapshots");
+  const hashes = new Map(existing.rows.map(row=>[String(row.period_start),String(row.source_hash)]));
+  const statements: {sql:string;args:string[]}[] = [];
+  for (const snapshot of snapshots) {
+    const payload = JSON.stringify(snapshot);
+    const hash = createHash("sha256").update(payload).digest("hex");
+    if (hashes.get(snapshot.from) !== hash) statements.push({sql:"INSERT INTO history_snapshots (period_start,source_hash,payload,updated_at) VALUES (?,?,?,?) ON CONFLICT(period_start) DO UPDATE SET source_hash=excluded.source_hash,payload=excluded.payload,updated_at=excluded.updated_at",args:[snapshot.from,hash,payload,new Date().toISOString()]});
+    hashes.delete(snapshot.from);
+  }
+  for (const start of hashes.keys()) statements.push({sql:"DELETE FROM history_snapshots WHERE period_start=?",args:[start]});
+  if (statements.length) await db.batch(statements,"write");
+  return snapshots;
 }

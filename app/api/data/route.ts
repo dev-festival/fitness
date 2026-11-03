@@ -1,11 +1,13 @@
 import { authorized, sameOrigin } from "@/lib/auth";
-import { addEntry, deleteEntry, getData, saveSettings } from "@/lib/db";
-import { entrySchema, settingsSchema } from "@/lib/model";
+import { addEntry, deleteEntry, getData, saveSettings, syncHistorySnapshots } from "@/lib/db";
+import { dateSchema, entrySchema, localDate, settingsSchema } from "@/lib/model";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export async function GET() {
+export async function GET(request: Request) {
   if (!await authorized()) return Response.json({ error: "Please sign in." }, { status: 401 });
-  try { return Response.json({ ...await getData(), aiEnabled: Boolean(process.env.OPENAI_API_KEY) }); }
+  const date = dateSchema.safeParse(new URL(request.url).searchParams.get("date") || localDate());
+  if (!date.success) return Response.json({error:"Choose a valid date."},{status:400});
+  try { const data = await getData(); const history = await syncHistorySnapshots(data.entries,date.data); return Response.json({ ...data, history, aiEnabled: Boolean(process.env.OPENAI_API_KEY) }); }
   catch (error) { console.error("Database unavailable", error); return Response.json({ error: "Could not open the database. Check your server configuration." }, { status: 503 }); }
 }
 export async function POST(request: Request) {

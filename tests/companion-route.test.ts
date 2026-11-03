@@ -29,12 +29,14 @@ test("companion sends the server's recent SQLite records, supports opt-out, and 
     assert.equal(calls.length, 1);
     assert.equal(calls[0].store, false);
     assert.ok(calls[0].input[0].content.includes("A walk helped."));
-    assert.ok(!JSON.stringify(calls[0]).includes("Excluded old private note"));
+    assert.ok(JSON.stringify(calls[0]).includes("Excluded old private note"));
     assert.ok(!JSON.stringify(calls[0]).includes("Excluded future note"));
     assert.ok(!JSON.stringify(calls[0]).includes("Client fabricated log"));
     const context = JSON.parse(calls[0].input[0].content.split("\n").slice(1).join("\n"));
     assert.equal(context.summary.daysLogged, 2);
     assert.equal(context.summary.daysUnknown, 12);
+    assert.equal(context.history.earlierTotals.urges, 1);
+    assert.equal(context.history.snapshots.length, 1);
     const privateResponse = await POST(request({ message: "Just my message", includeRecentData: false, referenceDate: "2026-11-02" }));
     assert.equal(privateResponse.status, 200);
     assert.deepEqual(calls[1].input, [{ role: "user", content: "Just my message" }]);

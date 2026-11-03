@@ -1,7 +1,7 @@
 import { authorized, sameOrigin } from "@/lib/auth";
-import { getData } from "@/lib/db";
-import { buildCompanionContext, buildCompanionInput, companionInstructions, companionRequestSchema, CONTEXT_DAYS } from "@/lib/companion";
-import { localDate, recentDates } from "@/lib/model";
+import { getData, syncHistorySnapshots } from "@/lib/db";
+import { buildCompanionContext, buildCompanionInput, companionInstructions, companionRequestSchema } from "@/lib/companion";
+import { localDate } from "@/lib/model";
 export const runtime = "nodejs";
 export async function POST(request: Request) {
   if (!sameOrigin(request) || !await authorized()) return Response.json({ error: "Please sign in." }, { status: 401 });
@@ -13,7 +13,8 @@ export async function POST(request: Request) {
   if (body.includeRecentData) {
     const referenceDate = body.referenceDate || localDate();
     try {
-      const { entries, settings } = await getData({ start: recentDates(referenceDate, CONTEXT_DAYS)[0], end: referenceDate });
+      const { entries, settings } = await getData();
+      await syncHistorySnapshots(entries,referenceDate);
       context = buildCompanionContext(entries, settings, referenceDate);
     } catch {
       return Response.json({ error: "Your recent logs couldn’t load. Try again, or turn off ‘Use recent logs’ to send just your message." }, { status: 503 });
