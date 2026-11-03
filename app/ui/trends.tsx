@@ -4,6 +4,8 @@ import { Activity,Archive,TrendingUp } from "lucide-react";
 import type { Entry,Settings } from "@/lib/model";
 import { dailyTrends,mean,summarizeEntries,type MetricKey,type TrendDay } from "@/lib/trends";
 import type { HistorySnapshot } from "@/lib/history";
+import { formatMoney } from "@/lib/money";
+import InsightCard from "./insight-card";
 
 type Metric={key:MetricKey;label:string;unit:string;color:string;range?:[number,number];clock?:boolean};
 function valueLabel(value:number,metric:Metric) {
@@ -40,7 +42,7 @@ function TrendChart({days,metric}:{days:TrendDay[];metric:Metric}) {
     </svg><div className="trend-footnote"><span>Average: {valueLabel(mean(observed)!,metric)}</span><span>{size>1?`${size}-day averages shown`:"Daily values"}</span></div><details className="trend-values"><summary>View values</summary><div><table><thead><tr><th>Date</th><th>Value</th></tr></thead><tbody>{points.filter(p=>p.value!==null).map(p=><tr key={p.from}><td>{p.from}{p.through!==p.from?` – ${p.through}`:""}</td><td>{valueLabel(p.value!,metric)}</td></tr>)}</tbody></table></div></details></>:<div className="trend-empty"><Activity size={23}/><p>No values logged in this range yet.</p></div>}
   </section>;
 }
-export default function Trends({entries,settings,date,history}:{entries:Entry[];settings:Settings;date:string;history:HistorySnapshot[]}) {
+export default function Trends({entries,settings,date,history,aiEnabled}:{entries:Entry[];settings:Settings;date:string;history:HistorySnapshot[];aiEnabled:boolean}) {
   const [range,setRange]=useState("30");
   const eligible=entries.filter(e=>e.date<=date);
   const first=eligible.reduce((from,e)=>e.date<from?e.date:from,date);
@@ -58,10 +60,13 @@ export default function Trends({entries,settings,date,history}:{entries:Entry[];
     {key:"calories",label:"Energy logged",unit:"kcal",color:"#c5ae6f"},{key:"protein",label:"Protein logged",unit:"g",color:"#7f9e78"},
     {key:"carbs",label:"Carbs logged",unit:"g",color:"#a99abb"},{key:"fat",label:"Fat logged",unit:"g",color:"#ca9e85"},
     {key:"trainingSets",label:"Training sets",unit:"",color:"#bb9c80"},{key:"trainingVolume",label:"Training volume",unit:`${settings.unit} × reps`,color:"#9aaa7c"},
-    {key:"journalEntries",label:"Journal entries",unit:"",color:"#8b9e93"}
+    {key:"journalEntries",label:"Journal entries",unit:"",color:"#8b9e93"},
+    {key:"foodSpend",label:"On-the-go food spend",unit:"USD",color:"#9ca67e"},{key:"alcoholSpend",label:"Alcohol purchases",unit:"USD",color:"#b09c86"}
   ];
   return <><div className="section-title trends-heading"><div><h2>Your patterns, in one place</h2><p className="muted small">Gaps mean no log. Food totals reflect what you recorded.</p></div><label className="range-select">Time range<select value={range} onChange={e=>setRange(e.target.value)}><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="all">All history</option></select></label></div>
     <div className="trend-summary"><div><strong>{summary.alcoholFreeDays}</strong><span>alcohol-free days / {summary.checkins} checked in</span></div><div><strong>{summary.averageSleep??"—"}<small> h</small></strong><span>average sleep from {summary.checkins} check-ins</span></div><div><strong>{summary.trainingDays}</strong><span>training days logged</span></div><div><strong>{summary.averageSentiment===null?"—":summary.averageSentiment.toFixed(2)}</strong><span>tone from {summary.sentimentScored} scored journal entries</span></div></div>
+    <div className="spending-overview"><div><strong>{summary.spending.pricedAwayMeals?formatMoney(summary.spending.foodSpendCents):"—"}</strong><span>on-the-go food · {summary.spending.pricedAwayMeals} of {summary.spending.awayMeals} tagged meals priced</span></div><div><strong>{summary.spending.alcoholPurchases?formatMoney(summary.spending.alcoholSpendCents):"—"}</strong><span>alcohol · {summary.spending.alcoholPurchases} purchases recorded</span></div><p>{summary.spending.homeMeals} meals from home · {summary.spending.untaggedMeals} untagged. These are recorded purchases; unknown costs stay unknown.</p></div>
+    <InsightCard mode="trends" entries={entries} settings={settings} from={days[0].date} through={date} aiEnabled={aiEnabled}/>
     <p className="muted small">Journal tone ranges from −1 to +1 and describes the writing. Mood is your own 1–5 check-in.</p>
     <div className="trends-grid">{metrics.map(metric=><TrendChart key={metric.key} days={days} metric={metric}/>)}</div>
     <section className="card memory-card"><div className="card-heading"><h2><Archive size={18}/>Companion history</h2><span>{history.length} snapshots</span></div><p>Recent days stay detailed. Older logs are compressed into two-week snapshots stored in your database. The companion gets the latest 12 snapshots plus totals across all older history. Originals remain available here and in your export; edits and deletions refresh the summaries.</p>{history.length?<details><summary>View saved snapshots</summary><div className="snapshot-list">{history.toReversed().map(s=><article key={s.from}><strong>{s.from} – {s.through}{s.complete?"":" · still growing"}</strong><p>{s.summary.checkins} check-ins · {s.summary.alcoholFreeDays} alcohol-free days · {s.summary.averageSleep??"—"}h average sleep · {s.summary.trainingDays} training days · {s.summary.journalEntries} journal entries</p></article>)}</div></details>:<p className="muted small">Your first snapshot appears once a logged day falls outside the recent 14-day window.</p>}</section>

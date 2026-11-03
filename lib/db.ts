@@ -21,7 +21,8 @@ async function ready() {
     "CREATE INDEX IF NOT EXISTS entries_date ON entries(date)",
     "CREATE UNIQUE INDEX IF NOT EXISTS one_checkin_per_day ON entries(date) WHERE kind = 'checkin'",
     "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id = 1), payload TEXT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS history_snapshots (period_start TEXT PRIMARY KEY, source_hash TEXT NOT NULL, payload TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    "CREATE TABLE IF NOT EXISTS history_snapshots (period_start TEXT PRIMARY KEY, source_hash TEXT NOT NULL, payload TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS companion_cards (cache_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, payload TEXT NOT NULL)"
   ], "write").then(() => {}).catch(error => { initialized = undefined; throw error; });
   await initialized;
   return db;
@@ -40,16 +41,16 @@ export async function getData(range?: { start: string; end: string }) {
 export async function addEntry(input: EntryInput) {
   const db = await ready();
   const entry = { ...input, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
-  await db.execute({
+  await db.batch([{
     sql: input.kind === "checkin"
       ? "INSERT INTO entries (id,kind,date,payload,created_at) VALUES (?,?,?,?,?) ON CONFLICT(date) WHERE kind = 'checkin' DO UPDATE SET payload = excluded.payload, created_at = excluded.created_at"
       : "INSERT INTO entries (id,kind,date,payload,created_at) VALUES (?,?,?,?,?)",
     args: [entry.id, input.kind, input.date, JSON.stringify(input), entry.createdAt]
-  });
+  },"DELETE FROM companion_cards"],"write");
 }
 export async function deleteEntry(id: string) {
   const db = await ready();
-  await db.execute({ sql: "DELETE FROM entries WHERE id = ?", args: [id] });
+  await db.batch([{ sql: "DELETE FROM entries WHERE id = ?", args: [id] },"DELETE FROM companion_cards"],"write");
 }
 export async function saveSettings(settings: Settings) {
   const db = await ready();
@@ -59,7 +60,7 @@ export async function saveSettings(settings: Settings) {
     const weights = await db.execute("SELECT id FROM entries WHERE kind IN ('weight','lift') LIMIT 1");
     if (weights.rows.length) throw new Error("Cannot change units while weight records exist");
   }
-  await db.execute({ sql: "INSERT INTO settings (id,payload) VALUES (1,?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload", args: [JSON.stringify(settings)] });
+  await db.batch([{ sql: "INSERT INTO settings (id,payload) VALUES (1,?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload", args: [JSON.stringify(settings)] },"DELETE FROM companion_cards"],"write");
 }
 
 export async function syncHistorySnapshots(entries: Entry[], referenceDate: string) {
@@ -77,4 +78,14 @@ export async function syncHistorySnapshots(entries: Entry[], referenceDate: stri
   for (const start of hashes.keys()) statements.push({sql:"DELETE FROM history_snapshots WHERE period_start=?",args:[start]});
   if (statements.length) await db.batch(statements,"write");
   return snapshots;
+}
+
+export async function readCompanionCard(cacheKey:string,fingerprint:string) {
+  const db=await ready();
+  const rows=await db.execute({sql:"SELECT payload FROM companion_cards WHERE cache_key=? AND fingerprint=?",args:[cacheKey,fingerprint]});
+  return rows.rows.length?JSON.parse(String(rows.rows[0].payload)):null;
+}
+export async function storeCompanionCard(cacheKey:string,fingerprint:string,payload:unknown) {
+  const db=await ready();
+  await db.execute({sql:"INSERT INTO companion_cards (cache_key,fingerprint,payload) VALUES (?,?,?) ON CONFLICT(cache_key) DO UPDATE SET fingerprint=excluded.fingerprint,payload=excluded.payload",args:[cacheKey,fingerprint,JSON.stringify(payload)]});
 }

@@ -33,7 +33,7 @@ export async function readLimitedJson(request: Request, maximum: number) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-async function structuredAnalysis(instructions:string, content:unknown[], name:string, schema:Record<string,unknown>) {
+export async function structuredAnalysis(instructions:string, content:unknown[], name:string, schema:Record<string,unknown>) {
   const response=await fetch("https://api.openai.com/v1/responses",{
     method:"POST",signal:AbortSignal.timeout(30000),headers:{Authorization:`Bearer ${process.env.OPENAI_API_KEY}`,"Content-Type":"application/json"},
     body:JSON.stringify({model:process.env.OPENAI_ANALYSIS_MODEL || process.env.OPENAI_MODEL || "gpt-4.1-mini",store:false,max_output_tokens:800,instructions,

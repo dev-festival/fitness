@@ -1,4 +1,5 @@
 import { dailyTotals, recentDates, type Entry } from "./model";
+import { spendingSummary } from "./money";
 
 export const mean = (values: number[]) => values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length * 100) / 100 : null;
 export function summarizeEntries(entries: Entry[]) {
@@ -11,7 +12,7 @@ export function summarizeEntries(entries: Entry[]) {
   const foodDays = new Set(food.map(e => e.date)).size;
   const sums = food.reduce((a,e) => e.kind === "food" ? { calories:a.calories+e.calories, protein:a.protein+e.protein, carbs:a.carbs+e.carbs, fat:a.fat+e.fat } : a, {calories:0,protein:0,carbs:0,fat:0});
   return {
-    entries: entries.length, daysWithAnyLog: new Set(entries.map(e => e.date)).size,
+    entries: entries.length, daysWithAnyLog: new Set(entries.map(e => e.date)).size,spending:spendingSummary(entries),
     checkins: checkins.length, alcoholFreeDays: checkins.filter(e => e.kind === "checkin" && e.drinks === 0).length,
     drinks: checkins.reduce((n,e) => n+(e.kind === "checkin" ? e.drinks : 0),0),
     averageSleep: mean(checkins.flatMap(e => e.kind === "checkin" ? [e.sleep] : [])),
@@ -49,7 +50,9 @@ export function dailyTrends(entries: Entry[], endDate: string, days: number) {
       calories:summary.foodDays ? dailyTotals(day,date).calories:null, protein:summary.foodDays ? summary.foodTotals.protein:null,
       carbs:summary.foodDays ? summary.foodTotals.carbs:null, fat:summary.foodDays ? summary.foodTotals.fat:null,
       trainingSets:summary.trainingDays ? summary.sets:null, trainingVolume:summary.trainingDays ? summary.trainingVolume:null,
-      urge:summary.averageUrge, sentiment:summary.averageSentiment, journalEntries:summary.journalEntries || null };
+      urge:summary.averageUrge, sentiment:summary.averageSentiment, journalEntries:summary.journalEntries || null,
+      foodSpend:summary.spending.pricedAwayMeals?summary.spending.foodSpendCents/100:null,
+      alcoholSpend:summary.spending.alcoholPurchases?summary.spending.alcoholSpendCents/100:null };
   });
 }
 export type TrendDay = ReturnType<typeof dailyTrends>[number];

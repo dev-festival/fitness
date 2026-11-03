@@ -3,6 +3,8 @@ import { useEffect,useRef,useState,type FormEvent } from "react";
 import { Camera,Check,Sparkles,X } from "lucide-react";
 import type { EntryInput } from "@/lib/model";
 import type { FoodEstimate } from "@/lib/analysis";
+import { localInputTime,parseDollars } from "@/lib/money";
+import { localDate } from "@/lib/model";
 
 async function preparePhoto(file:File) {
   if (!/^image\/(jpeg|png|webp)$/.test(file.type)) throw new Error("Choose a JPEG, PNG, or WebP photo.");
@@ -22,6 +24,7 @@ async function preparePhoto(file:File) {
 }
 export default function FoodLog({date,aiEnabled,busy,onSave,onBusyChange}:{date:string;aiEnabled:boolean;busy:boolean;onSave:(entry:EntryInput)=>Promise<boolean>;onBusyChange:(busy:boolean)=>void}) {
   const [description,setDescription]=useState(""); const [photo,setPhoto]=useState("");
+  const [initialWhen]=useState(()=>localInputTime(date));const [source,setSource]=useState(""),[cost,setCost]=useState("");
   const [values,setValues]=useState({name:"",calories:"",protein:"",carbs:"",fat:""});
   const [estimate,setEstimate]=useState<FoodEstimate|null>(null);
   const [pending,setPending]=useState(false); const [error,setError]=useState("");
@@ -39,11 +42,16 @@ export default function FoodLog({date,aiEnabled,busy,onSave,onBusyChange}:{date:
     } catch(error) { if(!(error instanceof Error && error.name==="AbortError")) setError(error instanceof Error?error.message:"Couldn’t estimate this meal."); }
     finally {setPending(false);}
   }
-  async function submit(event:FormEvent) {
+  async function submit(event:FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await onSave({kind:"food",date,name:values.name,calories:Number(values.calories),protein:Number(values.protein),carbs:Number(values.carbs),fat:Number(values.fat),...(estimate?{estimated:true,estimateNote:estimate.assumptions}:{})});
+    const when=String(new FormData(event.currentTarget).get("when"));
+    setError("");
+    try { await onSave({kind:"food",date:when.slice(0,10),occurredAt:new Date(when).toISOString(),timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,...(source?{source:source as "home"|"away"}:{}),...(source==="away"&&cost.trim()?{costCents:parseDollars(cost)}:{}),name:values.name,calories:Number(values.calories),protein:Number(values.protein),carbs:Number(values.carbs),fat:Number(values.fat),...(estimate?{estimated:true,estimateNote:estimate.assumptions}:{})}); }
+    catch(error) {setError(error instanceof Error?error.message:"Check the meal time and cost.");}
   }
   return <form onSubmit={submit}><p className="muted modal-date">Logging for {new Date(date+"T12:00:00").toLocaleDateString(undefined,{month:"long",day:"numeric"})}</p>
+    <label>When you ate<input name="when" type="datetime-local" defaultValue={initialWhen} max={`${localDate()}T23:59`} required disabled={pending||busy}/></label>
+    <div className="meal-source"><label>Where was it from?<select value={source} onChange={e=>{setSource(e.target.value);setCost("");}} disabled={pending||busy}><option value="">Not tagged</option><option value="home">From home</option><option value="away">On the go / eating out</option></select></label>{source==="away"&&<label>Cost (USD, optional)<input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={cost} onChange={e=>setCost(e.target.value)} placeholder="e.g. 8.50" disabled={pending||busy}/></label>}<p className="muted small">{source==="home"?"Home meals are tagged separately; grocery costs aren’t tracked here.":source==="away"?"Leave the price blank if you don’t know it.":"Tag the meal when it’s useful. You can leave this untagged."}</p></div>
     <section className="food-assistant"><div className="card-heading"><h3><Sparkles size={17}/>Estimate with AI</h3><Camera size={18}/></div>
       <label>Describe the food and portion<textarea rows={2} maxLength={3000} value={description} onChange={e=>setDescription(e.target.value)} placeholder="Two eggs, one slice of buttered toast, and a small latte" disabled={pending||busy}/></label>
       <label className="photo-picker">Or choose a meal photo<input type="file" accept="image/jpeg,image/png,image/webp" disabled={pending||busy||!aiEnabled} onChange={async e=>{

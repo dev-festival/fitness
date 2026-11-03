@@ -8,14 +8,20 @@ const text = z.string().trim().min(1).max(200);
 const amount = z.number().finite().min(0).max(10000);
 export const sentimentSchema = z.object({ score: z.number().finite().min(-1).max(1), summary: z.string().trim().min(1).max(300) });
 const timestamp = z.iso.datetime({ offset: true });
+export const timeZoneSchema = z.string().min(1).max(80).refine(value=>{
+  try { new Intl.DateTimeFormat("en-US",{timeZone:value}).format();return true; } catch {return false;}
+},"Choose a valid time zone");
+const money = z.number().int().min(0).max(1000000);
 export const entrySchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("food"), date: dateSchema, name: text, calories: amount, protein: amount, carbs: amount, fat: amount, estimated: z.boolean().optional(), estimateNote: z.string().max(500).optional() }),
+  z.object({ kind: z.literal("food"), date: dateSchema, name: text, calories: amount, protein: amount, carbs: amount, fat: amount, occurredAt:timestamp.optional(),timeZone:timeZoneSchema.optional(),source:z.enum(["home","away"]).optional(),costCents:money.optional(),estimated: z.boolean().optional(), estimateNote: z.string().max(500).optional() }),
+  z.object({ kind:z.literal("alcohol_purchase"),date:dateSchema,occurredAt:timestamp,timeZone:timeZoneSchema.optional(),name:text,costCents:money }),
   z.object({ kind: z.literal("lift"), date: dateSchema, name: text, sets: z.number().int().min(1).max(100), reps: z.number().int().min(1).max(1000), weight: amount }),
   z.object({ kind: z.literal("weight"), date: dateSchema, weight: z.number().finite().positive().max(1500) }),
   z.object({ kind: z.literal("checkin"), date: dateSchema, drinks: z.number().int().min(0).max(100), mood: z.number().int().min(1).max(5), sleep: z.number().finite().min(0).max(24), bedAt: timestamp.optional(), wakeAt: timestamp.optional(), note: z.string().trim().max(2000) }),
-  z.object({ kind: z.literal("journal"), date: dateSchema, occurredAt: timestamp, note: z.string().trim().min(1).max(4000), sentiment: sentimentSchema.optional() }),
+  z.object({ kind: z.literal("journal"), date: dateSchema, occurredAt: timestamp,timeZone:timeZoneSchema.optional(), note: z.string().trim().min(1).max(4000), sentiment: sentimentSchema.optional() }),
   z.object({ kind: z.literal("urge"), date: dateSchema, intensity: z.number().int().min(1).max(5), note: z.string().trim().max(2000) })
 ]).superRefine((entry, context) => {
+  if(entry.kind === "food" && entry.costCents !== undefined && entry.source !== "away") context.addIssue({code:"custom",message:"Assign spending to on-the-go food only",path:["costCents"]});
   if (entry.kind !== "checkin") return;
   if (Boolean(entry.bedAt) !== Boolean(entry.wakeAt)) context.addIssue({ code: "custom", message: "Add both bedtime and wake time", path: ["bedAt"] });
   if (entry.bedAt && entry.wakeAt) {

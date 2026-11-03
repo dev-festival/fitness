@@ -15,7 +15,7 @@ export async function POST(request: Request) {
     try {
       const { entries, settings } = await getData();
       await syncHistorySnapshots(entries,referenceDate);
-      context = buildCompanionContext(entries, settings, referenceDate);
+      context = buildCompanionContext(entries, settings, referenceDate,body.timeZone||"UTC");
     } catch {
       return Response.json({ error: "Your recent logs couldn’t load. Try again, or turn off ‘Use recent logs’ to send just your message." }, { status: 503 });
     }

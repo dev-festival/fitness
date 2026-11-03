@@ -1,16 +1,19 @@
 "use client";
-import { useEffect,useState,type FormEvent } from "react";
+import { useEffect,useRef,useState,type FormEvent } from "react";
 import { Check,Plus,Sparkles,Trash2 } from "lucide-react";
 import { localDate,type Entry,type EntryInput } from "@/lib/model";
 
 export const toneLabel=(score:number)=>score>0.15?"Positive":score< -0.15?"Negative":"Neutral / mixed";
 export function JournalLog({date,aiEnabled,busy,onSave,onBusyChange}:{date:string;aiEnabled:boolean;busy:boolean;onSave:(entry:EntryInput)=>Promise<boolean>;onBusyChange:(busy:boolean)=>void}) {
   const now=new Date();
-  const [time,setTime]=useState(`${date}T${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`);
+  const [initialTime]=useState(`${date}T${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`);
+  const formRef=useRef<HTMLFormElement>(null);
   const [note,setNote]=useState("");const [assess,setAssess]=useState(aiEnabled);const [pending,setPending]=useState(false);const [error,setError]=useState("");
   useEffect(()=>onBusyChange(pending),[pending,onBusyChange]);
   useEffect(()=>()=>onBusyChange(false),[onBusyChange]);
   async function save(withTone:boolean) {
+    if(!formRef.current?.reportValidity())return;
+    const time=String(new FormData(formRef.current).get("when"));
     setPending(true);setError("");
     try {
       let sentiment;
@@ -18,12 +21,12 @@ export function JournalLog({date,aiEnabled,busy,onSave,onBusyChange}:{date:strin
         const response=await fetch("/api/journal/sentiment",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({note})});
         const data=await response.json();if(!response.ok)throw new Error(data.error);sentiment=data.sentiment;
       }
-      await onSave({kind:"journal",date:time.slice(0,10),occurredAt:new Date(time).toISOString(),note,...(sentiment?{sentiment}:{})});
+      await onSave({kind:"journal",date:time.slice(0,10),occurredAt:new Date(time).toISOString(),timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,note,...(sentiment?{sentiment}:{})});
     }catch(error){setError(error instanceof Error?error.message:"Couldn’t save this thought.");}finally{setPending(false);}
   }
-  return <form onSubmit={(event:FormEvent)=>{event.preventDefault();void save(assess);}}>
+  return <form ref={formRef} onSubmit={(event:FormEvent)=>{event.preventDefault();void save(assess);}}>
     <p className="muted">A new entry for this moment. Come back as often as you like.</p>
-    <label>When<input type="datetime-local" value={time} max={`${localDate()}T23:59`} onChange={e=>setTime(e.target.value)} required disabled={pending||busy}/></label>
+    <label>When<input name="when" type="datetime-local" defaultValue={initialTime} max={`${localDate()}T23:59`} required disabled={pending||busy}/></label>
     <label>What’s on your mind?<textarea rows={6} value={note} maxLength={4000} onChange={e=>setNote(e.target.value)} placeholder="A thought, a win, a hard moment, or something you noticed…" required disabled={pending||busy}/></label>
     <label className="context-toggle"><input type="checkbox" checked={assess} onChange={e=>setAssess(e.target.checked)} disabled={!aiEnabled||pending||busy}/><span>Add an AI tone score<small>{aiEnabled?"This entry is sent to OpenAI when you save. Scores appear in All trends.":"Connect an AI key in preferences to score new entries."}</small></span></label>
     {error&&<div className="error" role="alert"><p>{error}</p><button type="button" className="secondary" disabled={pending||busy||!note.trim()} onClick={()=>save(false)}>Save without a score</button></div>}
