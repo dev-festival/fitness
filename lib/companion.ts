@@ -16,13 +16,10 @@ export const companionRequestSchema = z.object({
 });
 
 function checkinSummary(entries: Entry[], dates: string[]) {
-  const checkins = entries.filter(e => e.kind === "checkin" && dates.includes(e.date));
-  const total = checkins.reduce((sum, entry) => {
-    if (entry.kind !== "checkin") return sum;
-    return { drinks: sum.drinks + entry.drinks, sleep: sum.sleep + entry.sleep, mood: sum.mood + entry.mood, alcoholFree: sum.alcoholFree + Number(entry.drinks === 0) };
-  }, { drinks: 0, sleep: 0, mood: 0, alcoholFree: 0 });
-  const average = (value: number) => checkins.length ? Math.round(value / checkins.length * 10) / 10 : null;
-  return { daysLogged: checkins.length, daysUnknown: dates.length - checkins.length, alcoholFreeDaysLogged: total.alcoholFree, drinksLogged: total.drinks, averageSleepHours: average(total.sleep), averageMood: average(total.mood) };
+  const period = entries.filter(e => dates.includes(e.date));
+  const summary = summarizeEntries(period);
+  const round = (value: number | null) => value === null ? null : Math.round(value * 10) / 10;
+  return { daysLogged: summary.drinksDays, daysUnknown: dates.length - summary.drinksDays, alcoholFreeDaysLogged: summary.alcoholFreeDays, drinksLogged: summary.drinks, averageSleepHours: round(summary.averageSleep), averageMood: round(summary.averageMood) };
 }
 
 export function buildCompanionContext(entries: Entry[], settings: Settings, referenceDate: string,timeZone="UTC") {
@@ -32,7 +29,7 @@ export function buildCompanionContext(entries: Entry[], settings: Settings, refe
   const food = recent.filter(e => e.kind === "food");
   const lifts = recent.filter(e => e.kind === "lift");
   const weights = recent.filter(e => e.kind === "weight");
-  const notes = recent.flatMap(e => (e.kind === "checkin" || e.kind === "urge" || e.kind === "journal") && e.note.trim() ? [{ date: e.date, kind: e.kind, text: e.note.slice(0, MAX_NOTE_LENGTH), shortened: e.note.length > MAX_NOTE_LENGTH,...(e.kind==="journal"?{occurredAt:e.occurredAt,localTime:eventTimeLabel(e,timeZone)}:{}) }] : []);
+  const notes = recent.flatMap(e => (e.kind === "checkin" || e.kind === "urge" || e.kind === "journal") && e.note?.trim() ? [{ date: e.date, kind: e.kind, text: e.note.slice(0, MAX_NOTE_LENGTH), shortened: e.note.length > MAX_NOTE_LENGTH,...(e.kind==="journal"?{occurredAt:e.occurredAt,localTime:eventTimeLabel(e,timeZone)}:{}) }] : []);
   const urges = recent.filter(e => e.kind === "urge");
   const snapshots = buildHistorySnapshots(entries, referenceDate);
   const journals = recent.filter(e=>e.kind === "journal");
@@ -63,6 +60,7 @@ export function buildCompanionContext(entries: Entry[], settings: Settings, refe
       return {
         date,
         checkin: checkin?.kind === "checkin" ? { drinks: checkin.drinks, sleepHours: checkin.sleep, mood: checkin.mood, bedAt:checkin.bedAt, wakeAt:checkin.wakeAt } : null,
+        moodMoments: day.filter(e => e.kind === "mood").slice(0, 12).map(e => ({ mood: e.mood, localTime: eventTimeLabel(e, timeZone) })),
         journalTone:mean(day.flatMap(e=>e.kind === "journal" && e.sentiment ? [e.sentiment.score]:[])),
         nutritionLogged: dayFood.length ? { entries: dayFood.length, ...dailyTotals(dayFood, date) } : null,
         training: dayLifts.length ? { exercisesLogged: dayLifts.length, sets: dayLifts.reduce((sum, e) => sum + (e.kind === "lift" ? e.sets : 0), 0) } : null,

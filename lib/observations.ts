@@ -1,5 +1,5 @@
 import { localDate,recentDates,type Entry,type Settings } from "./model";
-import { mean } from "./trends";
+import { dailyMoods, mean } from "./trends";
 import { eventTimeLabel,spendingSummary } from "./money";
 import { dateOffset } from "./history";
 
@@ -25,14 +25,15 @@ export function combinedObservations(entries:Entry[]) {
   const checkins=entries.filter(e=>e.kind === "checkin");
   const morningAfterFree:number[]=[];const morningAfterDrinks:number[]=[];
   for(const next of checkins){
-    if(next.kind!=="checkin")continue;
+    if(next.sleep === undefined)continue;
     const before=checkins.find(e=>e.date===dateOffset(next.date,-1));
-    if(before?.kind!=="checkin")continue;
+    if(before?.drinks === undefined)continue;
     (before.drinks===0?morningAfterFree:morningAfterDrinks).push(next.sleep);
   }
   const trainingDates=new Set(entries.filter(e=>e.kind==="lift").map(e=>e.date));
-  const trainingMood=checkins.flatMap(e=>e.kind==="checkin"&&trainingDates.has(e.date)?[e.mood]:[]);
-  const otherMood=checkins.flatMap(e=>e.kind==="checkin"&&!trainingDates.has(e.date)?[e.mood]:[]);
+  const moods = [...dailyMoods(entries)];
+  const trainingMood=moods.flatMap(([date, mood])=>trainingDates.has(date)?[mood]:[]);
+  const otherMood=moods.flatMap(([date, mood])=>!trainingDates.has(date)?[mood]:[]);
   return {
     sleepAfterAlcoholFree:{days:morningAfterFree.length,averageHours:mean(morningAfterFree)},sleepAfterDrinks:{days:morningAfterDrinks.length,averageHours:mean(morningAfterDrinks)},
     moodWithTraining:{days:trainingMood.length,average:mean(trainingMood)},moodWithoutTrainingLog:{days:otherMood.length,average:mean(otherMood)},

@@ -39,14 +39,31 @@ export async function getData(range?: { start: string; end: string }) {
   };
 }
 export async function addEntry(input: EntryInput) {
+  await addEntries([input]);
+}
+export async function addEntries(inputs: EntryInput[]) {
   const db = await ready();
-  const entry = { ...input, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
-  await db.batch([{
+  const createdAt = new Date().toISOString();
+  const statements = inputs.map(input => ({
     sql: input.kind === "checkin"
-      ? "INSERT INTO entries (id,kind,date,payload,created_at) VALUES (?,?,?,?,?) ON CONFLICT(date) WHERE kind = 'checkin' DO UPDATE SET payload = excluded.payload, created_at = excluded.created_at"
+      ? `INSERT INTO entries (id,kind,date,payload,created_at) VALUES (?,?,?,?,?)
+         ON CONFLICT(date) WHERE kind = 'checkin' DO UPDATE SET payload = json_patch(
+           CASE WHEN json_type(excluded.payload, '$.sleep') IS NOT NULL
+             THEN json_remove(entries.payload, '$.bedAt', '$.wakeAt')
+             ELSE entries.payload END,
+           excluded.payload)`
       : "INSERT INTO entries (id,kind,date,payload,created_at) VALUES (?,?,?,?,?)",
-    args: [entry.id, input.kind, input.date, JSON.stringify(input), entry.createdAt]
-  },"DELETE FROM companion_cards"],"write");
+    args: [crypto.randomUUID(), input.kind, input.date, JSON.stringify(input), createdAt]
+  }));
+  await db.batch([...statements, "DELETE FROM companion_cards"], "write");
+}
+export async function updateEntry(id: string, input: Extract<EntryInput, {kind: "food" | "weight" | "lift"}>) {
+  const db = await ready();
+  const [result] = await db.batch([
+    { sql: "UPDATE entries SET date = ?, payload = ? WHERE id = ? AND kind = ?", args: [input.date, JSON.stringify(input), id, input.kind] },
+    "DELETE FROM companion_cards"
+  ], "write");
+  return result.rowsAffected > 0;
 }
 export async function deleteEntry(id: string) {
   const db = await ready();

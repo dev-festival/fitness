@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Activity, ArrowDownToLine, ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, CircleHelp, Coffee, Dumbbell, Flame, Heart, LayoutDashboard, Leaf, LogOut, Menu, Moon, Plus, Scale, Send, Settings2, ShieldCheck, Sparkles, Sprout, Timer, Trash2, Utensils, Waves, X } from "lucide-react";
-import { dailyTotals, defaults, localDate, recentDates, type Entry, type Settings } from "@/lib/model";
+import { dailyTotals, defaults, localDate, recentDates, type Entry, type EntryInput, type Settings } from "@/lib/model";
+import { Pencil } from "lucide-react";
 import { buildCompanionContext, CONTEXT_DAYS } from "@/lib/companion";
 import FoodLog from "./food-log";
 import { JournalLog, JournalTimeline } from "./journal";
@@ -10,12 +11,12 @@ import SleepFields from "./sleep-fields";
 import Trends from "./trends";
 import { sleepFromTimes } from "@/lib/sleep";
 import type { HistorySnapshot } from "@/lib/history";
-import { eventTimeLabel, formatMoney, entryInstant } from "@/lib/money";
-import InsightCard from "./insight-card";
+import { eventTimeLabel, formatMoney, entryInstant, localInputTime } from "@/lib/money";
 import { AlcoholSpendingLog, AlcoholSpendCard } from "./alcohol-spending";
 
 type View = "Today" | "Alcohol & urges" | "Training" | "Nutrition" | "Wellbeing" | "Journal" | "All trends" | "Settings";
-type ModalKind = "food" | "lift" | "weight" | "checkin" | "urge" | "coach" | "support" | "journal" | "purchase" | null;
+type ModalKind = "food" | "lift" | "weight" | "checkin" | "start-day" | "mood" | "sleep" | "urge" | "coach" | "support" | "journal" | "purchase" | null;
+type EditableEntry = Extract<Entry, {kind: "food" | "weight" | "lift"}>;
 const navigation = [
   { name: "Today", icon: LayoutDashboard }, { name: "Alcohol & urges", icon: Coffee }, { name: "Training", icon: Dumbbell },
   { name: "Nutrition", icon: Utensils }, { name: "Wellbeing", icon: Heart }, { name: "Journal", icon: BookOpen }, { name: "All trends", icon: Activity }
@@ -44,7 +45,8 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
   const [coachBusy, setCoachBusy] = useState(false);
   const [coachError, setCoachError] = useState("");
   const [intensity, setIntensity] = useState(3);
-  const [mood, setMood] = useState(3);
+  const [mood, setMood] = useState<number>();
+  const [editing, setEditing] = useState<EditableEntry | null>(null);
 
   async function load() {
     const response = await fetch(`/api/data?date=${localDate()}`, { cache: "no-store" });
@@ -67,8 +69,11 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
   const today = entries.filter(e => e.date === date);
   const totals = dailyTotals(entries, date);
   const checkin = today.find(e => e.kind === "checkin");
+  const hasWeight = today.some(e => e.kind === "weight");
+  const firstCheckin = checkin?.mood === undefined && checkin?.sleep === undefined && !hasWeight && !today.some(e => e.kind === "mood");
+  const logDate = editing?.date ?? date;
   const week = recentDates(date, 7);
-  const weeklyCheckins = entries.filter(e => e.kind === "checkin" && week.includes(e.date));
+  const weeklyCheckins = entries.filter(e => e.kind === "checkin" && e.drinks !== undefined && week.includes(e.date));
   const alcoholFree = weeklyCheckins.filter(e => e.kind === "checkin" && e.drinks === 0).length;
   const workoutDays = new Set(entries.filter(e => e.kind === "lift" && week.includes(e.date)).map(e => e.date)).size;
   const weights = entries.filter(e => e.kind === "weight" && e.date <= date).sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
@@ -90,24 +95,47 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
     } catch (error) { setError(error instanceof Error ? error.message : "Could not save."); return false; }
     finally { setBusy(false); }
   }
-  function open(kind: ModalKind) { setError(""); setModal(kind); if (kind === "checkin") setMood(checkin?.kind === "checkin" ? checkin.mood : 3); }
+  function open(kind: ModalKind, entry: EditableEntry | null = null) {
+    setError("");
+    setEditing(entry);
+    setMood(undefined);
+    setModal(kind);
+  }
+  async function saveEntry(entry: EntryInput) {
+    const saved = await mutate(editing ? { action: "update", id: editing.id, entry } : entry, editing ? "Changes saved." : undefined);
+    if (saved) setModal(null);
+    return saved;
+  }
   async function submitLog(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget);
     const number = (name: string) => Number(form.get(name));
-    let body: Record<string, unknown> = { kind: modal, date };
-    if (modal === "food") body = { ...body, name: form.get("name"), calories: number("calories"), protein: number("protein"), carbs: number("carbs"), fat: number("fat") };
-    if (modal === "lift") body = { ...body, name: form.get("name"), sets: number("sets"), reps: number("reps"), weight: number("weight") };
-    if (modal === "weight") body = { ...body, weight: number("weight") };
-    if (modal === "checkin") {
-      let interval = {};
-      if (form.get("sleepMode") === "times") {
-        try { interval = sleepFromTimes(date, String(form.get("bedtime")), String(form.get("wakeTime"))); }
-        catch (error) { setError(error instanceof Error ? error.message : "Check the sleep times."); return; }
-      }
-      body = { ...body, drinks: number("drinks"), sleep: number("sleep"), ...interval, mood, note: form.get("note") };
+    if (modal === "lift") return saveEntry({ kind: "lift", date: logDate, name: String(form.get("name")), sets: number("sets"), reps: number("reps"), weight: number("weight") });
+    if (modal === "weight") return saveEntry({ kind: "weight", date: logDate, weight: number("weight") });
+    if (modal === "urge") return saveEntry({ kind: "urge", date, intensity, note: String(form.get("note")) });
+    if (modal === "checkin") return saveEntry({ kind: "checkin", date, drinks: number("drinks") });
+
+    const steps: EntryInput[] = [];
+    if (mood !== undefined) {
+      const when = String(form.get("when"));
+      const stamp = modal === "start-day" ? `${date}T${when}` : when;
+      steps.push({ kind: "mood", date: stamp.slice(0, 10), mood, occurredAt: new Date(stamp).toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
     }
-    if (modal === "urge") body = { ...body, intensity, note: form.get("note") };
-    if (await mutate(body)) setModal(null);
+    if (modal === "start-day" && form.get("weight")) steps.push({ kind: "weight", date, weight: number("weight") });
+    try {
+      if (form.get("bedtime") || form.get("wakeTime")) {
+        steps.push({ kind: "checkin", date, ...sleepFromTimes(date, String(form.get("bedtime")), String(form.get("wakeTime"))) });
+      } else if (form.get("sleep")) {
+        steps.push({ kind: "checkin", date, sleep: number("sleep") });
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Check the sleep times.");
+      return;
+    }
+    if (!steps.length) {
+      setError(modal === "mood" ? "Choose how you’re feeling." : "Add at least one detail to save.");
+      return;
+    }
+    if (await mutate({ action: "start-day", entries: steps })) setModal(null);
   }
   function startTimer() {
     const end = Date.now() + 600000; setTimerEnd(end); setRemaining(600); sessionStorage.setItem("steady-urge-end", String(end));
@@ -124,12 +152,48 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
     const url = URL.createObjectURL(new Blob([JSON.stringify({ version: 2, exportedAt: new Date().toISOString(), settings, entries, history }, null, 2)], { type: "application/json" }));
     const a = document.createElement("a"); a.href = url; a.download = `steady-${localDate()}.json`; a.click(); URL.revokeObjectURL(url);
   }
-  const recordList = (items: Entry[], empty: string) => items.length ? <div className="record-list">{items.toSorted((a,b)=>b.date.localeCompare(a.date)||entryInstant(b)-entryInstant(a)).map(entry => <div className="record" key={entry.id}><div className={`record-icon ${entry.kind}`}>
-    {entry.kind === "food" ? <Utensils size={17}/> : entry.kind === "lift" ? <Dumbbell size={17}/> : entry.kind === "weight" ? <Scale size={17}/> : entry.kind === "alcohol_purchase" ? <Coffee size={17}/> : entry.kind === "urge" ? <Waves size={17}/> : <Heart size={17}/>}
-  </div><div className="record-main"><strong>{entry.kind === "food" || entry.kind === "lift" || entry.kind === "alcohol_purchase" ? entry.name : entry.kind === "weight" ? "Weight check-in" : entry.kind === "urge" ? "You paused and checked in" : entry.kind === "journal" ? "A thought for the day" : "Daily check-in"}</strong><span>
-    {entry.kind === "food" ? `${entry.calories} kcal · ${entry.protein}g protein · ${entry.carbs}g carbs · ${entry.fat}g fat${entry.estimated ? " · AI-assisted estimate" : ""}` : entry.kind === "lift" ? `${entry.sets} × ${entry.reps} · ${entry.weight} ${settings.unit}` : entry.kind === "weight" ? `${entry.weight} ${settings.unit}` : entry.kind === "checkin" ? `${entry.drinks} drinks · ${entry.sleep}h sleep · Feeling ${moods[entry.mood - 1].toLowerCase()}` : entry.kind === "alcohol_purchase" ? `${formatMoney(entry.costCents)} · ${eventTimeLabel(entry)}` : entry.kind === "urge" ? `Urge intensity ${entry.intensity}/5` : entry.kind === "journal" ? `${new Date(entry.occurredAt).toLocaleTimeString(undefined, {hour:"numeric",minute:"2-digit"})}${entry.sentiment ? ` · Tone ${entry.sentiment.score.toFixed(2)}` : ""}` : ""}
-  </span>{entry.kind === "food" && <span className="food-entry-context">{eventTimeLabel(entry) || "Time not recorded"} · {entry.source === "home" ? "From home" : entry.source === "away" ? "On the go" : "Not tagged"}{entry.costCents !== undefined ? ` · ${formatMoney(entry.costCents)}` : ""}</span>}{(entry.kind === "checkin" || entry.kind === "urge" || entry.kind === "journal") && entry.note && <p>{entry.note}</p>}</div><span className="record-date">{new Date(entry.date + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span><button className="icon-button delete" disabled={busy} aria-label={`Delete ${entry.kind === "food" || entry.kind === "lift" || entry.kind === "alcohol_purchase" ? entry.name : entry.kind + " entry"}`} onClick={() => mutate({ action: "delete", id: entry.id }, "Entry removed.")}><Trash2 size={15}/></button></div>)}</div> : <div className="empty-state"><Leaf size={24}/><p>{empty}</p><span>There’s no perfect place to start. Just here.</span></div>;
-
+  function recordList(items: Entry[], empty: string) {
+    if (!items.length) return <div className="empty-state"><Leaf size={24}/><p>{empty}</p></div>;
+    return <div className="record-list">{items.toSorted((a,b) => b.date.localeCompare(a.date) || entryInstant(b) - entryInstant(a)).map(entry => {
+      const editable = entry.kind === "food" || entry.kind === "weight" || entry.kind === "lift";
+      const named = entry.kind === "food" || entry.kind === "lift" || entry.kind === "alcohol_purchase";
+      const title = named ? entry.name : {
+        weight: "Body weight", mood: "Mood", checkin: "Daily details", journal: "A thought", urge: "You paused and checked in"
+      }[entry.kind];
+      const Icon = entry.kind === "food" ? Utensils : entry.kind === "lift" ? Dumbbell : entry.kind === "weight" ? Scale : entry.kind === "alcohol_purchase" ? Coffee : entry.kind === "urge" ? Waves : entry.kind === "journal" ? BookOpen : Heart;
+      const time = "occurredAt" in entry ? eventTimeLabel(entry) : null;
+      let detail: string | null;
+      switch (entry.kind) {
+        case "food": detail = `${entry.calories} kcal · ${entry.protein}g protein · ${entry.carbs}g carbs · ${entry.fat}g fat${entry.estimated ? " · AI-assisted estimate" : ""}`; break;
+        case "lift": detail = `${entry.sets} × ${entry.reps} · ${entry.weight} ${settings.unit}`; break;
+        case "weight": detail = `${entry.weight} ${settings.unit}`; break;
+        case "mood": detail = `${time} · ${moods[entry.mood - 1]}`; break;
+        case "alcohol_purchase": detail = `${time} · ${formatMoney(entry.costCents)}`; break;
+        case "urge": detail = `Urge intensity ${entry.intensity}/5`; break;
+        case "journal": detail = entry.sentiment ? `${time} · Tone ${entry.sentiment.score.toFixed(2)}` : time; break;
+        case "checkin": detail = [
+          entry.drinks === undefined ? null : `${entry.drinks} drinks`,
+          entry.sleep === undefined ? null : `${entry.sleep}h sleep`,
+          entry.bedAt && entry.wakeAt ? `${eventTimeLabel({occurredAt: entry.bedAt})}–${eventTimeLabel({occurredAt: entry.wakeAt})}` : null,
+          entry.mood === undefined ? null : `Feeling ${moods[entry.mood - 1].toLowerCase()}`
+        ].filter(Boolean).join(" · "); break;
+      }
+      return <div className="record" key={entry.id}>
+        <div className={`record-icon ${entry.kind}`}><Icon size={17}/></div>
+        <div className="record-main">
+          <strong>{title}</strong>
+          {detail && <span>{detail}</span>}
+          {entry.kind === "food" && <span className="food-entry-context">{time || "Time not recorded"} · {entry.source === "home" ? "From home" : entry.source === "away" ? "On the go" : "Not tagged"}{entry.costCents !== undefined ? ` · ${formatMoney(entry.costCents)}` : ""}</span>}
+          {"note" in entry && entry.note && <p>{entry.note}</p>}
+        </div>
+        <span className="record-date">{new Date(entry.date + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
+        <div className="record-actions">
+          {editable && <button className="icon-button" disabled={busy} aria-label={`Edit ${title}`} title="Edit entry" onClick={() => open(entry.kind, entry)}><Pencil size={16}/></button>}
+          <button className="icon-button delete" disabled={busy} aria-label={`Delete ${title}`} onClick={() => mutate({ action: "delete", id: entry.id }, "Entry removed.")}><Trash2 size={15}/></button>
+        </div>
+      </div>;
+    })}</div>;
+  }
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav ? "is-open" : ""}`}>
       <a className="brand" href="/" aria-label="Steady home"><span className="brand-mark"><Sprout size={23}/></span>steady<span className="brand-dot">.</span></a>
@@ -147,31 +211,49 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
         {error && !modal && <div role="alert" className="error-banner">{error}<button onClick={() => load().catch(e => setError(e.message))}>Try again</button></div>}
         {!loaded && !error && <div className="loading" role="status">Opening your space…</div>}
         {loaded && <>
-        {(view === "Today" || view === "Alcohol & urges") && <section className="hero-card"><div className="hero-copy"><span className="pill"><span/> ONE CHOICE AT A TIME</span><h2>You don’t need to figure out forever.<br/>Just this moment.</h2><p>A craving is a feeling, not an instruction.<br/>Give yourself a little space before your next choice.</p><div className="hero-actions"><button className="primary" onClick={() => open("urge")}><Waves size={18}/>I’m having an urge<ArrowRight size={17}/></button><button className="text-button" onClick={() => open("checkin")}>Log a check-in<ArrowRight size={16}/></button></div></div><div className="hero-art" aria-hidden="true"><div className="sun"/><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="hill hill-back"/><div className="hill hill-mid"/><div className="hill hill-front"/><div className="art-sprout"><Sprout strokeWidth={1.1}/></div><span>ONE DAY. ONE STEP.</span></div></section>}
+        {(view === "Alcohol & urges") && <section className="hero-card"><div className="hero-copy"><span className="pill"><span/> ONE CHOICE AT A TIME</span><h2>You don’t need to figure out forever.<br/>Just this moment.</h2><p>A craving is a feeling, not an instruction.<br/>Give yourself a little space before your next choice.</p><div className="hero-actions"><button className="primary" onClick={() => open("urge")}><Waves size={18}/>I’m having an urge<ArrowRight size={17}/></button><button className="text-button" onClick={() => open("checkin")}>Log drinks<ArrowRight size={16}/></button></div></div><div className="hero-art" aria-hidden="true"><div className="sun"/><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="hill hill-back"/><div className="hill hill-mid"/><div className="hill hill-front"/><div className="art-sprout"><Sprout strokeWidth={1.1}/></div><span>ONE DAY. ONE STEP.</span></div></section>}
 
         {view === "Today" && <>
           <div className="section-title"><h2>Your day at a glance</h2><span>Small steps count.</span></div>
           <section className="stat-grid">
-            <button className="stat-card" onClick={() => setView("Alcohol & urges")}><div className="stat-top"><span className="stat-icon sage"><Coffee size={18}/></span><span>Alcohol-free days<ArrowRight size={14}/></span></div><div className="stat-value">{alcoholFree}<small> / 7 days</small></div><div className="mini-days">{week.map(d => { const c = weeklyCheckins.find(e => e.date === d); return <span key={d} className={c?.kind === "checkin" ? c.drinks === 0 ? "free" : "logged" : ""} title={`${d}: ${c?.kind === "checkin" ? c.drinks + " drinks" : "not logged"}`}>{c?.kind === "checkin" && c.drinks === 0 ? <Check size={12}/> : new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "narrow" })}</span>; })}</div><p>Last 7 days · {weeklyCheckins.length} checked in</p></button>
+            <button className="stat-card" onClick={() => setView("Alcohol & urges")}><div className="stat-top"><span className="stat-icon sage"><Coffee size={18}/></span><span>Alcohol-free days<ArrowRight size={14}/></span></div><div className="stat-value">{alcoholFree}<small> / 7 days</small></div><div className="mini-days">{week.map(d => { const c = weeklyCheckins.find(e => e.date === d); return <span key={d} className={c?.kind === "checkin" ? c.drinks === 0 ? "free" : "logged" : ""} title={`${d}: ${c?.kind === "checkin" ? c.drinks + " drinks" : "not logged"}`}>{c?.kind === "checkin" && c.drinks === 0 ? <Check size={12}/> : new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "narrow" })}</span>; })}</div><p>Last 7 days · {weeklyCheckins.length} days logged</p></button>
             <button className="stat-card" onClick={() => setView("Training")}><div className="stat-top"><span className="stat-icon apricot"><Dumbbell size={18}/></span><span>Training this week<ArrowRight size={14}/></span></div><div className="stat-value">{workoutDays}<small> / {settings.weeklyWorkouts} sessions</small></div><div className="progress-track"><i style={{ width: `${Math.min(100, workoutDays / settings.weeklyWorkouts * 100)}%`, background: "var(--orange)" }}/></div><p>Last 7 days · {workoutDays ? "Keep showing up for yourself." : "Your next session starts with showing up."}</p></button>
             <button className="stat-card" onClick={() => open("food")}><div className="stat-top"><span className="stat-icon butter"><Flame size={18}/></span><span>Daily nourishment<Plus size={15}/></span></div><div className="stat-value">{totals.calories.toLocaleString()}<small> / {settings.calories.toLocaleString()} kcal</small></div><div className="progress-track"><i style={{ width: `${Math.min(100, totals.calories / settings.calories * 100)}%`, background: "var(--yellow)" }}/></div><p>{totals.protein}g protein · {totals.carbs}g carbs · {totals.fat}g fat</p></button>
             <button className="stat-card" onClick={() => open("weight")}><div className="stat-top"><span className="stat-icon lavender"><Scale size={18}/></span><span>Body weight<Plus size={15}/></span></div><div className="stat-value">{latestWeight?.kind === "weight" ? latestWeight.weight : "—"}<small> {settings.unit}</small></div><WeightSparkline weights={weights}/><p>{latestWeight ? `Last logged ${new Date(latestWeight.date + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : "A data point, not a judgment."}</p></button>
           </section>
-          <div className="dashboard-lower"><section className="card checkin-card"><div className="card-heading"><div><span className="eyebrow">A MOMENT FOR YOU</span><h2>How are you feeling?</h2></div><Heart size={20}/></div><p>Check in with yourself. No right or wrong answer.</p><div className="mood-row">{moods.map((label, index) => <button key={label} onClick={() => { setMood(index + 1); setModal("checkin"); }} className={checkin?.kind === "checkin" && checkin.mood === index + 1 ? "selected" : ""}><MoodFace mood={index + 1}/><span>{label}</span></button>)}</div><div className="checkin-footer"><span><Moon size={15}/>{checkin?.kind === "checkin" ? `${checkin.sleep} hours of sleep logged` : "A little reflection goes a long way."}</span><button className="text-button" onClick={() => open("checkin")}>{checkin ? "Edit check-in" : "Check in"}<ArrowRight size={15}/></button></div></section>
-          <InsightCard mode="home" entries={entries} settings={settings} from={recentDates(date,14)[0]} through={date} aiEnabled={aiEnabled} onChat={()=>open("coach")}/></div>
-          <section className="card activity-card"><div className="card-heading"><h2>Your small steps today</h2><div className="quick-actions"><button className="small-button" onClick={() => open("food")}><Plus size={14}/>Food</button><button className="small-button" onClick={() => open("lift")}><Plus size={14}/>Training</button></div></div>{recordList(today, "A fresh page for your day.")}</section>
+
+
+          <section className="card activity-card small-steps">
+            <div className="card-heading">
+              <h2>{isToday ? "Your small steps today" : "Your small steps"}</h2>
+              <button className="text-button" onClick={() => setView("All trends")}><Sparkles size={16}/>Insights<ArrowRight size={15}/></button>
+            </div>
+            <div className="step-actions">
+              {firstCheckin && <div className="first-checkin">
+                <p>Start with how you feel, your weight, or last night’s sleep.</p>
+                <button className="primary" onClick={() => open("start-day")}><Heart size={16}/>First check-in</button>
+              </div>}
+              <div className="quick-actions">
+                <button className="small-button" onClick={() => open("food")}><Plus size={14}/>Food</button>
+                <button className="small-button" onClick={() => open("journal")}><Plus size={14}/>Thought</button>
+                {!firstCheckin && <button className="small-button" onClick={() => open("mood")}><Plus size={14}/>Mood</button>}
+                <button className="small-button" onClick={() => open("lift")}><Plus size={14}/>Training</button>
+              </div>
+            </div>
+            {recordList(today, "A fresh page for your day.")}
+          </section>
         </>}
 
-        {view === "Alcohol & urges" && <><AlcoholSpendCard entries={entries.filter(e=>week.includes(e.date))} onNew={()=>open("purchase")}/><div className="two-column"><section className="card padded"><div className="card-heading"><h2>The last seven days</h2><Coffee size={20}/></div><div className="large-number">{alcoholFree}<span> alcohol-free days logged</span></div><p className="muted">Only your check-ins count. Unlogged days stay unknown.</p><div className="week-grid">{week.map(d => { const c = weeklyCheckins.find(e => e.date === d); return <button key={d} onClick={() => setDate(d)} className={d === date ? "selected" : ""}><span>{new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "short" })}</span><strong>{c?.kind === "checkin" ? c.drinks === 0 ? <Check size={21}/> : c.drinks : "—"}</strong><small>{c?.kind === "checkin" ? c.drinks === 0 ? "alcohol-free" : "drinks" : "not logged"}</small></button>; })}</div><button className="secondary" onClick={() => open("checkin")}>Log or update this day<Plus size={16}/></button></section><section className="card reason-card"><Sprout size={27}/><span className="eyebrow">YOUR WHY</span><h2>{settings.reason || "What do you want more room for in your life?"}</h2><button className="text-button" onClick={() => setView("Settings")}>Make it personal<ArrowRight size={15}/></button></section></div><section className="card activity-card"><div className="card-heading"><h2>Check-ins & moments</h2><button className="small-button" onClick={() => open("urge")}><Plus size={14}/>Log an urge</button></div>{recordList(entries.filter(e => (e.kind === "checkin" || e.kind === "urge" || e.kind === "alcohol_purchase") && e.date <= date), "Your story can start with one check-in.")}</section></>}
+        {view === "Alcohol & urges" && <><AlcoholSpendCard entries={entries.filter(e=>week.includes(e.date))} onNew={()=>open("purchase")}/><div className="two-column"><section className="card padded"><div className="card-heading"><h2>The last seven days</h2><Coffee size={20}/></div><div className="large-number">{alcoholFree}<span> alcohol-free days logged</span></div><p className="muted">Only days with a drink total are counted.</p><div className="week-grid">{week.map(d => { const c = weeklyCheckins.find(e => e.date === d); return <button key={d} onClick={() => setDate(d)} className={d === date ? "selected" : ""}><span>{new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "short" })}</span><strong>{c?.kind === "checkin" ? c.drinks === 0 ? <Check size={21}/> : c.drinks : "—"}</strong><small>{c?.kind === "checkin" ? c.drinks === 0 ? "alcohol-free" : "drinks" : "not logged"}</small></button>; })}</div><button className="secondary" onClick={() => open("checkin")}>Log or update drinks<Plus size={16}/></button></section><section className="card reason-card"><Sprout size={27}/><span className="eyebrow">YOUR WHY</span><h2>{settings.reason || "What do you want more room for in your life?"}</h2><button className="text-button" onClick={() => setView("Settings")}>Make it personal<ArrowRight size={15}/></button></section></div><section className="card activity-card"><div className="card-heading"><h2>Check-ins & moments</h2><button className="small-button" onClick={() => open("urge")}><Plus size={14}/>Log an urge</button></div>{recordList(entries.filter(e => (e.kind === "checkin" || e.kind === "urge" || e.kind === "alcohol_purchase") && e.date <= date), "Your story can start with one check-in.")}</section></>}
 
         {view === "Training" && <><div className="section-title"><h2>Training log</h2><button className="primary" onClick={() => open("lift")}><Plus size={17}/>Log an exercise</button></div><div className="summary-strip"><div><Dumbbell size={22}/><strong>{workoutDays}<span> sessions in the last 7 days</span></strong></div><p>Log exercises with the same date to build a session.<br/>Weights are in {settings.unit}; use 0 for bodyweight work.</p></div><section className="card activity-card"><div className="card-heading"><h2>{isToday ? "Today’s work" : "This day’s work"}</h2><span className="muted">Sets × reps · {settings.unit}</span></div>{recordList(today.filter(e => e.kind === "lift"), "Your next small win is waiting.")}</section><section className="card activity-card"><div className="card-heading"><h2>Previous sessions</h2></div>{recordList(entries.filter(e => e.kind === "lift" && e.date < date), "Your training history will grow here.")}</section></>}
 
         {view === "Nutrition" && <><div className="section-title"><h2>Nourishment, without the noise</h2><button className="primary" onClick={() => open("food")}><Plus size={17}/>Log food</button></div><div className="nutrition-grid">{(["calories", "protein", "carbs", "fat"] as const).map((key, i) => <section className="card macro-card" key={key}><span className="eyebrow">{key === "calories" ? "ENERGY" : key.toUpperCase()}</span><h2>{totals[key].toLocaleString()}<small> / {settings[key]}{key === "calories" ? " kcal" : "g"}</small></h2><div className="progress-track"><i style={{ width: `${Math.min(100, totals[key] / settings[key] * 100)}%`, background: ["#d6ad61", "#628b71", "#9b91ad", "#cd957b"][i] }}/></div></section>)}</div><p className="muted subnote">Edit your goals in preferences. Log values from food labels or your own estimates.</p><section className="card activity-card"><div className="card-heading"><h2>On your plate</h2></div>{recordList(today.filter(e => e.kind === "food"), "Start with your next meal or snack.")}</section></>}
 
-        {view === "Wellbeing" && <><div className="section-title"><h2>Notice how you’re doing</h2><div className="quick-actions"><button className="secondary" onClick={() => open("weight")}><Scale size={16}/>Log weight</button><button className="primary" onClick={() => open("checkin")}><Heart size={16}/>Daily check-in</button></div></div><div className="two-column"><section className="card padded"><span className="eyebrow">BODY WEIGHT · {settings.unit.toUpperCase()}</span><div className="large-number">{latestWeight?.kind === "weight" ? latestWeight.weight : "—"}<span> {settings.unit}</span></div><WeightSparkline weights={weights} large/><p className="muted">A trend over time, not a verdict on today.</p></section><section className="card padded"><span className="eyebrow">THIS DAY’S CHECK-IN</span><h2>{checkin?.kind === "checkin" ? `Feeling ${moods[checkin.mood - 1].toLowerCase()}` : "You deserve a moment."}</h2><p className="muted">{checkin?.kind === "checkin" ? `${checkin.sleep} hours of sleep · ${checkin.drinks} drinks logged` : "Make a little room to notice your mood, sleep, and day."}</p><button className="text-button" onClick={() => open("checkin")}>{checkin ? "Edit reflection" : "Check in with yourself"}<ArrowRight size={16}/></button></section></div><section className="card activity-card"><div className="card-heading"><h2>Wellbeing history</h2></div>{recordList(entries.filter(e => (e.kind === "weight" || e.kind === "checkin") && e.date <= date), "A little self-awareness starts here.")}</section></>}
+        {view === "Wellbeing" && <><div className="section-title"><h2>Notice how you’re doing</h2><div className="quick-actions"><button className="secondary" onClick={() => open("weight")}><Scale size={16}/>Log weight</button><button className="primary" onClick={() => open("mood")}><Heart size={16}/>Log a mood</button></div></div><div className="two-column"><section className="card padded"><span className="eyebrow">BODY WEIGHT · {settings.unit.toUpperCase()}</span><div className="large-number">{latestWeight?.kind === "weight" ? latestWeight.weight : "—"}<span> {settings.unit}</span></div><WeightSparkline weights={weights} large/><p className="muted">A trend over time, not a verdict on today.</p></section><section className="card padded"><span className="eyebrow">LAST NIGHT’S SLEEP</span><h2>{checkin?.sleep === undefined ? "How did you sleep?" : `${checkin.sleep} hours`}</h2><button className="text-button" onClick={() => open("sleep")}><Moon size={16}/>{checkin?.sleep === undefined ? "Log sleep" : "Edit sleep"}<ArrowRight size={16}/></button></section></div><section className="card activity-card"><div className="card-heading"><h2>Wellbeing history</h2></div>{recordList(entries.filter(e => (e.kind === "weight" || e.kind === "mood" || (e.kind === "checkin" && (e.sleep !== undefined || e.mood !== undefined))) && e.date <= date), "A little self-awareness starts here.")}</section></>}
 
         {view === "Journal" && <><div className="section-title"><h2>Notice. Reflect. Begin again.</h2><button className="primary" onClick={() => open("journal")}><Plus size={17}/>New thought</button></div><div className="journal-note"><BookOpen size={22}/><p>A good day, a hard day, a small thing you noticed.<br/>Each thought keeps its own time. Write as often as you like.</p></div><JournalTimeline entries={entries.filter(e=>e.date<=date)} busy={busy} onDelete={id=>{void mutate({action:"delete",id},"Entry removed.");}} onNew={()=>open("journal")}/></>}
-        {view === "All trends" && <Trends entries={entries} settings={settings} date={date} history={history.filter(s=>s.through<=date)} aiEnabled={aiEnabled}/>}
+        {view === "All trends" && <Trends entries={entries} settings={settings} date={date} history={history.filter(s=>s.through<=date)} aiEnabled={aiEnabled} onChat={() => open("coach")}/>}
 
         {view === "Settings" && <form className="settings-form" key={JSON.stringify(settings)} onSubmit={async event => {
           event.preventDefault(); const data = new FormData(event.currentTarget);
@@ -184,20 +266,30 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
       </div>
     </main>
     {toast && <div className="toast" role="status"><Check size={18}/>{toast}</div>}
-    {modal && <Dialog title={modal === "urge" ? "Let’s make a little space." : modal === "food" ? "A little nourishment." : modal === "lift" ? "One step stronger." : modal === "weight" ? "A moment to check in." : modal === "checkin" ? "How’s your day been?" : modal === "purchase" ? "Log alcohol spending." : modal === "journal" ? "A thought for this moment." : modal === "coach" ? "In your corner." : "You don’t have to do this alone."} onClose={() => { if (!busy && !coachBusy && !auxBusy) setModal(null); }}>
+    {modal && <Dialog title={modal === "urge" ? "Let’s make a little space." : modal === "food" ? editing ? "Edit food" : "A little nourishment." : modal === "lift" ? editing ? "Edit exercise" : "One step stronger." : modal === "weight" ? editing ? "Edit body weight" : "Log body weight" : modal === "checkin" ? "Drinks for this day" : modal === "start-day" ? "Your first check-in" : modal === "mood" ? "How are you feeling right now?" : modal === "sleep" ? "Last night’s sleep" : modal === "purchase" ? "Log alcohol spending." : modal === "journal" ? "A thought for this moment." : modal === "coach" ? "In your corner." : "You don’t have to do this alone."} onClose={() => { if (!busy && !coachBusy && !auxBusy) setModal(null); }}>
       {error && <p className="error" role="alert">{error}</p>}
       {modal === "urge" && <><p className="muted">You only need to choose what to do next. Let’s pause together.</p><div className="urge-timer"><div className={`breathing-orb ${timerEnd ? "breathing" : ""}`}><Waves size={32}/></div><strong>{String(Math.floor(remaining / 60)).padStart(2, "0")}<span>:</span>{String(remaining % 60).padStart(2, "0")}</strong><span>{remaining === 0 ? "You gave yourself some space. How do you feel now?" : timerEnd ? "Breathe slowly. Relax your shoulders." : "A 10-minute pause. One moment at a time."}</span><button className="primary" onClick={startTimer} disabled={Boolean(timerEnd)}><Timer size={17}/>{timerEnd ? "You’re taking a pause" : remaining === 0 ? "Take another pause" : "Start my pause"}</button></div><div className="urge-steps"><p><span>01</span>Get a glass of water or something else you enjoy.</p><p><span>02</span>Move away from the drink. Change your surroundings.</p><p><span>03</span>Text someone you trust: “Could use some company.”</p></div><blockquote>{settings.reason}</blockquote><form onSubmit={submitLog}><label>How strong is the urge? <span className="range-value">{intensity} / 5</span><input type="range" min="1" max="5" value={intensity} onChange={e => setIntensity(Number(e.target.value))}/></label><label>What’s going on? <span className="optional">(optional)</span><textarea name="note" maxLength={2000} rows={2} placeholder="A hard day? A familiar routine? Just notice it."/></label><button className="secondary full" disabled={busy}>Save this moment<Check size={16}/></button></form><p className="muted small">The timer keeps going if you close this window.</p></>}
-      {modal === "food" && <FoodLog date={date} aiEnabled={aiEnabled} busy={busy} onBusyChange={setAuxBusy} onSave={async entry=>{const saved=await mutate(entry);if(saved)setModal(null);return saved;}}/>}
+      {modal === "food" && <FoodLog date={logDate} initial={editing?.kind === "food" ? editing : undefined} aiEnabled={aiEnabled} busy={busy} onBusyChange={setAuxBusy} onSave={saveEntry}/>}
       {modal === "purchase" && <AlcoholSpendingLog date={date} busy={busy} onSave={async entry=>{const saved=await mutate(entry,"Purchase saved.");if(saved)setModal(null);return saved;}}/>}
       {modal === "journal" && <JournalLog date={date} aiEnabled={aiEnabled} busy={busy} onBusyChange={setAuxBusy} onSave={async entry=>{const saved=await mutate(entry,"Thought saved.");if(saved)setModal(null);return saved;}}/>}
-      {(modal === "lift" || modal === "weight" || modal === "checkin") && <form onSubmit={submitLog} key={modal}>
-        <p className="muted modal-date">Logging for {displayDate.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</p>
-        {modal === "lift" && <><Field label="Exercise" name="name" placeholder="e.g. Barbell squat" required maxLength={200}/><div className="form-grid"><Field label="Sets" name="sets" type="number" min={1} max={100} defaultValue={3} required/><Field label="Reps per set" name="reps" type="number" min={1} max={1000} defaultValue={8} required/><Field label={`Weight (${settings.unit})`} name="weight" type="number" min={0} max={10000} step="any" required/></div><p className="muted small">Different weights or reps? Save separate entries. Use 0 for bodyweight work.</p></>}
-        {modal === "weight" && <><Field label={`Body weight (${settings.unit})`} name="weight" type="number" min={0.1} max={1500} step="any" required/><p className="muted">This is information, not a measure of your worth.</p></>}
-        {modal === "checkin" && <><label>How are you feeling?</label><div className="mood-row compact">{moods.map((label, index) => <button type="button" key={label} className={mood === index + 1 ? "selected" : ""} aria-pressed={mood === index + 1} onClick={() => setMood(index + 1)}><MoodFace mood={index + 1}/><span>{label}</span></button>)}</div><div className="form-grid"><Field label="Drinks today" name="drinks" type="number" min={0} max={100} defaultValue={checkin?.kind === "checkin" ? checkin.drinks : 0} required/></div><SleepFields date={date} initial={checkin}/><p className="muted small">Record your total drinks for this day. Saving again updates this check-in.</p><label>A little reflection <span className="optional">(optional)</span><textarea name="note" maxLength={2000} rows={3} defaultValue={checkin?.kind === "checkin" ? checkin.note : ""} placeholder="What helped? What was hard? What’s one thing you’re glad about?"/></label></>}
-        <button className="primary full" disabled={busy}>{busy ? "Saving…" : "Save this small step"}<Check size={17}/></button>
+      {(modal === "lift" || modal === "weight" || modal === "checkin" || modal === "start-day" || modal === "mood" || modal === "sleep") && <form onSubmit={submitLog} key={modal}>
+        <p className="muted modal-date">{editing ? "Editing entry for" : "Logging for"} {new Date(logDate + "T12:00:00").toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</p>
+        {modal === "lift" && <><Field label="Exercise" name="name" placeholder="e.g. Barbell squat" defaultValue={editing?.kind === "lift" ? editing.name : undefined} required maxLength={200}/><div className="form-grid"><Field label="Sets" name="sets" type="number" min={1} max={100} defaultValue={editing?.kind === "lift" ? editing.sets : 3} required/><Field label="Reps per set" name="reps" type="number" min={1} max={1000} defaultValue={editing?.kind === "lift" ? editing.reps : 8} required/><Field label={`Weight (${settings.unit})`} name="weight" type="number" min={0} max={10000} step="any" defaultValue={editing?.kind === "lift" ? editing.weight : undefined} required/></div><p className="muted small">Different weights or reps? Save separate entries. Use 0 for bodyweight work.</p></>}
+        {modal === "weight" && <><Field label={`Body weight (${settings.unit})`} name="weight" type="number" min={0.1} max={1500} step="any" defaultValue={editing?.kind === "weight" ? editing.weight : undefined} required/><p className="muted">This is information, not a measure of your worth.</p></>}
+        {modal === "checkin" && <Field label="Total drinks for this date" name="drinks" type="number" min={0} max={100} defaultValue={checkin?.drinks} required/>}
+        {(modal === "mood" || modal === "start-day") && <>
+          <fieldset className="mood-picker">
+            <legend>{modal === "start-day" ? "How are you feeling? (optional)" : "Choose a mood"}</legend>
+            <div className="mood-row compact">{moods.map((label, index) => <button type="button" key={label} className={mood === index + 1 ? "selected" : ""} aria-pressed={mood === index + 1} onClick={() => setMood(mood === index + 1 ? undefined : index + 1)}><MoodFace mood={index + 1}/><span>{label}</span></button>)}</div>
+          </fieldset>
+          <label>Time of this mood<input name="when" type={modal === "start-day" ? "time" : "datetime-local"} defaultValue={modal === "start-day" ? localInputTime(date).slice(11) : localInputTime(date)} max={modal === "mood" ? `${localDate()}T23:59` : undefined} required={mood !== undefined}/></label>
+        </>}
+        {modal === "start-day" && !hasWeight && <Field label={`Body weight (${settings.unit}, optional)`} name="weight" type="number" min={0.1} max={1500} step="any"/>}
+        {(modal === "sleep" || (modal === "start-day" && checkin?.sleep === undefined)) && <SleepFields date={date} initial={checkin} optional={modal === "start-day"}/>}
+
+        <button className="primary full" disabled={busy}>{busy ? "Saving…" : editing ? "Save changes" : "Save this small step"}<Check size={17}/></button>
       </form>}
-      {modal === "coach" && <><div className="coach-intro"><Sparkles size={23}/><p>A little help connecting the dots and choosing your next step. What’s on your mind?</p></div>{!aiEnabled && <div className="ai-off"><h3>Your companion is ready to connect.</h3><p>Add your own OpenAI API key in your server environment to enable conversations. The urge timer and every tracking feature work without AI.</p><button className="secondary" onClick={() => { setModal(null); setView("Settings"); }}>View connection settings<ArrowRight size={15}/></button></div>}<form onSubmit={sendCoach}><label>Your message<textarea rows={4} maxLength={3000} value={coachInput} onChange={e => setCoachInput(e.target.value)} placeholder="What patterns do you notice in my recent sleep, mood, and drinking?" required disabled={!aiEnabled}/></label><div className="companion-context"><label className="context-toggle"><input type="checkbox" checked={useRecentLogs} onChange={e => setUseRecentLogs(e.target.checked)} disabled={coachBusy}/><span>Use my app history<small>Your last {CONTEXT_DAYS} days, plus compact snapshots of older logs</small></span></label>{useRecentLogs && companionContext && <details className="context-preview"><summary>What your companion can see</summary><p>{companionContext.window.from} through {companionContext.window.through}</p><ul><li>{companionContext.summary.daysLogged} daily check-ins · {companionContext.summary.alcoholFreeDaysLogged} alcohol-free days logged</li><li>{companionContext.summary.foodDaysLogged} days with food logs · {companionContext.summary.trainingDaysLogged} training days</li><li>{companionContext.summary.weightReadings} weight readings · {companionContext.summary.urgesLogged} urges logged</li><li>{companionContext.summary.journalEntries} journal entries · up to 12 recent notes</li><li>Your goals, your reason, and {companionContext.history.periodsIncluded} older snapshots</li></ul><span>Unlogged days stay unknown. Food totals may cover only part of a day.</span></details>}<p className="muted small">{useRecentLogs ? "Your message, recent context, and older snapshots are sent to OpenAI when you press Send." : "Only your message is sent to OpenAI."}</p></div><button className="primary full" disabled={!aiEnabled || coachBusy || !coachInput.trim()}>{coachBusy ? "Thinking with you…" : "Send to companion"}<Send size={16}/></button></form>{coachError && <p className="error" role="alert">{coachError}</p>}{coachReply && <div className="coach-response" role="status">{coachReply}</div>}</>}
+      {modal === "coach" && <><div className="coach-intro"><Sparkles size={23}/><p>A little help connecting the dots and choosing your next step. What’s on your mind?</p></div>{!aiEnabled && <div className="ai-off"><h3>Your companion is ready to connect.</h3><p>Add your own OpenAI API key in your server environment to enable conversations. The urge timer and every tracking feature work without AI.</p><button className="secondary" onClick={() => { setModal(null); setView("Settings"); }}>View connection settings<ArrowRight size={15}/></button></div>}<form onSubmit={sendCoach}><label>Your message<textarea rows={4} maxLength={3000} value={coachInput} onChange={e => setCoachInput(e.target.value)} placeholder="What patterns do you notice in my recent sleep, mood, and drinking?" required disabled={!aiEnabled}/></label><div className="companion-context"><label className="context-toggle"><input type="checkbox" checked={useRecentLogs} onChange={e => setUseRecentLogs(e.target.checked)} disabled={coachBusy}/><span>Use my app history<small>Your last {CONTEXT_DAYS} days, plus compact snapshots of older logs</small></span></label>{useRecentLogs && companionContext && <details className="context-preview"><summary>What your companion can see</summary><p>{companionContext.window.from} through {companionContext.window.through}</p><ul><li>{companionContext.summary.daysLogged} days with drinks logged · {companionContext.summary.alcoholFreeDaysLogged} alcohol-free days logged</li><li>{companionContext.summary.foodDaysLogged} days with food logs · {companionContext.summary.trainingDaysLogged} training days</li><li>{companionContext.summary.weightReadings} weight readings · {companionContext.summary.urgesLogged} urges logged</li><li>{companionContext.summary.journalEntries} journal entries · up to 12 recent notes</li><li>Your goals, your reason, and {companionContext.history.periodsIncluded} older snapshots</li></ul><span>Unlogged days stay unknown. Food totals may cover only part of a day.</span></details>}<p className="muted small">{useRecentLogs ? "Your message, recent context, and older snapshots are sent to OpenAI when you press Send." : "Only your message is sent to OpenAI."}</p></div><button className="primary full" disabled={!aiEnabled || coachBusy || !coachInput.trim()}>{coachBusy ? "Thinking with you…" : "Send to companion"}<Send size={16}/></button></form>{coachError && <p className="error" role="alert">{coachError}</p>}{coachReply && <div className="coach-response" role="status">{coachReply}</div>}</>}
       {modal === "support" && <div className="support-content"><p>Wanting support is a good enough reason to ask for it. This app can help you notice patterns and take a pause; people and professional care can help too.</p><a href="https://alcoholtreatment.niaaa.nih.gov/" target="_blank" rel="noreferrer"><Heart size={20}/><span><strong>Find alcohol treatment</strong><small>NIAAA’s guide to professional support</small></span><ArrowRight size={17}/></a><a href="https://rethinkingdrinking.niaaa.nih.gov/" target="_blank" rel="noreferrer"><BookOpen size={20}/><span><strong>Rethinking Drinking</strong><small>Practical tools and information from NIAAA</small></span><ArrowRight size={17}/></a><div className="health-note"><strong>A note on stopping safely</strong><p>If you drink heavily or have withdrawal symptoms, talk with a clinician before stopping suddenly. Alcohol withdrawal can be dangerous. For seizures, hallucinations, confusion, or severe symptoms, seek emergency care.</p><a className="inline-link" href="https://rethinkingdrinking.niaaa.nih.gov/thinking-about-change/cut-down-or-quit" target="_blank" rel="noreferrer">Read NIAAA’s guidance<ArrowRight size={13}/></a></div></div>}
     </Dialog>}
   </div>;

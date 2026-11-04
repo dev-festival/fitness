@@ -117,3 +117,16 @@ input:not([type=range]):not([type=checkbox]),textarea,select{font-size:16px;min-
 
 .sidebar{padding-top:26px}.sidebar-tagline{margin-bottom:24px}.sidebar-note{margin:18px 12px 12px;padding:12px 10px}.sidebar-note .little-sprout{margin-bottom:4px}.sidebar-note p{font-size:13px;line-height:1.6;margin-bottom:5px}.sidebar-note>span{font-size:12px}.sidebar-bottom .nav-item{font-size:13px;padding:9px 12px}.profile{padding:16px 20px}
 @media(max-height:780px){.sidebar-note{display:none}}
+
+.step-actions { padding: 16px 24px; border-bottom: 1px solid var(--line); }
+.step-actions .quick-actions { flex-wrap: wrap; }
+.first-checkin { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+.first-checkin p { margin: 0; color: var(--muted); }
+.mood-picker { border: 0; padding: 0; margin: 12px 0; min-inline-size: 0; }
+.mood-picker legend { color: var(--ink); }
+.record-actions { display: flex; flex-shrink: 0; }
+.record-actions .icon-button { min-width: 36px; min-height: 36px; }
+@media (max-width: 480px) {
+  .step-actions { padding: 14px 16px; }
+  .small-steps > .card-heading { flex-wrap: wrap; }
+}

@@ -2,6 +2,21 @@ import { dailyTotals, recentDates, type Entry } from "./model";
 import { spendingSummary } from "./money";
 
 export const mean = (values: number[]) => values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length * 100) / 100 : null;
+export function dailyMoods(entries: Entry[]) {
+  const moments = new Map<string, number[]>();
+  const legacy = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.kind === "mood") {
+      const values = moments.get(entry.date) ?? [];
+      values.push(entry.mood);
+      moments.set(entry.date, values);
+    } else if (entry.kind === "checkin" && entry.mood !== undefined) {
+      legacy.set(entry.date, entry.mood);
+    }
+  }
+  for (const [date, values] of moments) legacy.set(date, mean(values)!);
+  return legacy;
+}
 export function summarizeEntries(entries: Entry[]) {
   const checkins = entries.filter(e => e.kind === "checkin");
   const food = entries.filter(e => e.kind === "food");
@@ -13,10 +28,13 @@ export function summarizeEntries(entries: Entry[]) {
   const sums = food.reduce((a,e) => e.kind === "food" ? { calories:a.calories+e.calories, protein:a.protein+e.protein, carbs:a.carbs+e.carbs, fat:a.fat+e.fat } : a, {calories:0,protein:0,carbs:0,fat:0});
   return {
     entries: entries.length, daysWithAnyLog: new Set(entries.map(e => e.date)).size,spending:spendingSummary(entries),
-    checkins: checkins.length, alcoholFreeDays: checkins.filter(e => e.kind === "checkin" && e.drinks === 0).length,
-    drinks: checkins.reduce((n,e) => n+(e.kind === "checkin" ? e.drinks : 0),0),
-    averageSleep: mean(checkins.flatMap(e => e.kind === "checkin" ? [e.sleep] : [])),
-    averageMood: mean(checkins.flatMap(e => e.kind === "checkin" ? [e.mood] : [])),
+    checkins: checkins.length,
+    drinksDays: checkins.filter(e => e.drinks !== undefined).length,
+    sleepDays: checkins.filter(e => e.sleep !== undefined).length,
+    alcoholFreeDays: checkins.filter(e => e.drinks === 0).length,
+    drinks: checkins.reduce((n,e) => n+(e.drinks ?? 0),0),
+    averageSleep: mean(checkins.flatMap(e => e.sleep === undefined ? [] : [e.sleep])),
+    averageMood: mean([...dailyMoods(entries).values()]),
     foodDays, foodTotals: sums,
     trainingDays: new Set(lifts.map(e => e.date)).size,
     sets: lifts.reduce((n,e) => n+(e.kind === "lift" ? e.sets : 0),0),
@@ -43,8 +61,8 @@ export function dailyTrends(entries: Entry[], endDate: string, days: number) {
       return n;
     };
     const latestWeight = day.filter(e => e.kind === "weight").sort((a,b)=>b.createdAt.localeCompare(a.createdAt))[0];
-    return { date, drinks:checkin?.kind === "checkin" ? checkin.drinks:null, sleep:checkin?.kind === "checkin" ? checkin.sleep:null,
-      mood:checkin?.kind === "checkin" ? checkin.mood:null,
+    return { date, drinks:checkin?.drinks ?? null, sleep:checkin?.sleep ?? null,
+      mood:summary.averageMood,
       bedtime:checkin?.kind === "checkin" ? clock(checkin.bedAt,true):null, wakeTime:checkin?.kind === "checkin" ? clock(checkin.wakeAt):null,
       weight:latestWeight?.kind === "weight" ? latestWeight.weight:null,
       calories:summary.foodDays ? dailyTotals(day,date).calories:null, protein:summary.foodDays ? summary.foodTotals.protein:null,

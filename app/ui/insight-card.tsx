@@ -9,7 +9,7 @@ export default function InsightCard({mode,entries,settings,from,through,aiEnable
   const [card,setCard]=useState<CompanionCard|null>(null);const [pending,setPending]=useState(false);const [error,setError]=useState("");
   const active=useRef<AbortController|null>(null);
   const timeZone=Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const revision=JSON.stringify(entries.map(e=>[e.id,e.createdAt]))+JSON.stringify(settings);
+  const revision=JSON.stringify({entries,settings});
   const selected=entries.filter(e=>e.date>=from&&e.date<=through);
   const fallback=mode==="home"?{...encouragement(selected,settings,through),suggestion:""}:localTrendInsight(selected);
   useEffect(()=>{

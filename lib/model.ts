@@ -17,16 +17,18 @@ export const entrySchema = z.discriminatedUnion("kind", [
   z.object({ kind:z.literal("alcohol_purchase"),date:dateSchema,occurredAt:timestamp,timeZone:timeZoneSchema.optional(),name:text,costCents:money }),
   z.object({ kind: z.literal("lift"), date: dateSchema, name: text, sets: z.number().int().min(1).max(100), reps: z.number().int().min(1).max(1000), weight: amount }),
   z.object({ kind: z.literal("weight"), date: dateSchema, weight: z.number().finite().positive().max(1500) }),
-  z.object({ kind: z.literal("checkin"), date: dateSchema, drinks: z.number().int().min(0).max(100), mood: z.number().int().min(1).max(5), sleep: z.number().finite().min(0).max(24), bedAt: timestamp.optional(), wakeAt: timestamp.optional(), note: z.string().trim().max(2000) }),
+  z.object({ kind: z.literal("checkin"), date: dateSchema, drinks: z.number().int().min(0).max(100).optional(), mood: z.number().int().min(1).max(5).optional(), sleep: z.number().finite().min(0).max(24).optional(), bedAt: timestamp.optional(), wakeAt: timestamp.optional(), note: z.string().trim().max(2000).optional() }),
+  z.object({ kind: z.literal("mood"), date: dateSchema, occurredAt: timestamp, timeZone: timeZoneSchema.optional(), mood: z.number().int().min(1).max(5) }),
   z.object({ kind: z.literal("journal"), date: dateSchema, occurredAt: timestamp,timeZone:timeZoneSchema.optional(), note: z.string().trim().min(1).max(4000), sentiment: sentimentSchema.optional() }),
   z.object({ kind: z.literal("urge"), date: dateSchema, intensity: z.number().int().min(1).max(5), note: z.string().trim().max(2000) })
 ]).superRefine((entry, context) => {
   if(entry.kind === "food" && entry.costCents !== undefined && entry.source !== "away") context.addIssue({code:"custom",message:"Assign spending to on-the-go food only",path:["costCents"]});
   if (entry.kind !== "checkin") return;
+  if (entry.drinks === undefined && entry.sleep === undefined && entry.mood === undefined && !entry.note) context.addIssue({ code: "custom", message: "Add a daily detail" });
   if (Boolean(entry.bedAt) !== Boolean(entry.wakeAt)) context.addIssue({ code: "custom", message: "Add both bedtime and wake time", path: ["bedAt"] });
   if (entry.bedAt && entry.wakeAt) {
     const hours = (Date.parse(entry.wakeAt) - Date.parse(entry.bedAt)) / 3600000;
-    if (hours <= 0 || hours > 24 || Math.abs(entry.sleep - hours) > 0.02) context.addIssue({ code: "custom", message: "Sleep duration must match bedtime and wake time", path: ["sleep"] });
+    if (entry.sleep === undefined || hours <= 0 || hours > 24 || Math.abs(entry.sleep - hours) > 0.02) context.addIssue({ code: "custom", message: "Sleep duration must match bedtime and wake time", path: ["sleep"] });
   }
 });
 export type EntryInput = z.infer<typeof entrySchema>;
