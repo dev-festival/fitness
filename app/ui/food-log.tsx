@@ -1,5 +1,5 @@
 "use client";
-import { useEffect,useMemo,useRef,useState,type FormEvent } from "react";
+import { useEffect,useId,useMemo,useRef,useState,type FormEvent } from "react";
 import { Camera,Check,Sparkles,X } from "lucide-react";
 import type { Entry, EntryInput } from "@/lib/model";
 import type { FoodEstimate } from "@/lib/analysis";
@@ -35,10 +35,11 @@ export default function FoodLog({date,entries,initial,aiEnabled,busy,onSave,onBu
   const [values,setValues]=useState({name:initial?.name ?? "",calories:String(initial?.calories ?? ""),protein:String(initial?.protein ?? ""),carbs:String(initial?.carbs ?? ""),fat:String(initial?.fat ?? "")});
   const [estimate,setEstimate]=useState<FoodEstimate|null>(null);
   const [provenance,setProvenance]=useState({ estimated: initial?.estimated, estimateNote: initial?.estimateNote });
-  const [search,setSearch]=useState("");
+  const [historyOpen,setHistoryOpen]=useState(false);
+  const historyId=useId();
   const [reused,setReused]=useState("");
   const foods=useMemo(()=>previousFoods(entries),[entries]);
-  const query=search.trim().toLocaleLowerCase("en-US").split(/\s+/).filter(Boolean);
+  const query=values.name.trim().toLocaleLowerCase("en-US").split(/\s+/).filter(Boolean);
   const matches=foods.filter(({entry})=>query.every(word=>entry.name.toLocaleLowerCase("en-US").includes(word)));
   const [pending,setPending]=useState(false); const [error,setError]=useState("");
   const request=useRef<AbortController|null>(null);
@@ -51,7 +52,7 @@ export default function FoodLog({date,entries,initial,aiEnabled,busy,onSave,onBu
       const response=await fetch("/api/food/estimate",{method:"POST",headers:{"Content-Type":"application/json"},signal:request.current.signal,body:JSON.stringify({description,image:photo||undefined})});
       const data=await response.json();if(!response.ok) throw new Error(data.error);
       const result:FoodEstimate=data.estimate;setEstimate(result);
-      setProvenance({estimated:true,estimateNote:result.assumptions});setReused("");
+      setProvenance({estimated:true,estimateNote:result.assumptions});setReused("");setHistoryOpen(false);
       setValues({name:result.name,calories:String(result.calories),protein:String(result.protein),carbs:String(result.carbs),fat:String(result.fat)});
     } catch(error) { if(!(error instanceof Error && error.name==="AbortError")) setError(error instanceof Error?error.message:"Couldn’t estimate this meal."); }
     finally {setPending(false);}
@@ -71,25 +72,31 @@ export default function FoodLog({date,entries,initial,aiEnabled,busy,onSave,onBu
     catch(error) {setError(error instanceof Error?error.message:"Check the meal time and cost.");}
   }
   return <form onSubmit={submit}><p className="muted modal-date">{initial?"Editing entry for":"Logging for"} {new Date(date+"T12:00:00").toLocaleDateString(undefined,{month:"long",day:"numeric"})}</p>
-    {foods.length > 0 && <section className="food-history" aria-label="Previously logged foods and drinks">
-      <h3>Have it again</h3>
-      <label>Search your foods & drinks<input type="search" value={search} onChange={event=>setSearch(event.target.value)} placeholder="Coffee, yogurt, sparkling water…" disabled={pending||busy}/></label>
-      <p className="muted small">{search.trim() ? `${matches.length} saved option${matches.length === 1 ? "" : "s"}` : "Your most repeated foods and drinks. Choose one to fill the name and macros."}</p>
+    <div className="food-prompt" onBlur={event=>{
+      if (!event.currentTarget.contains(event.relatedTarget)) setHistoryOpen(false);
+    }} onKeyDown={event=>{
+      if(event.key==="Escape"&&historyOpen){event.preventDefault();event.stopPropagation();setHistoryOpen(false);}
+    }}>
+      <label>What did you eat?<input name="name" value={values.name} onChange={event=>{setValues({...values,name:event.target.value});setReused("");setHistoryOpen(true);}} maxLength={200} required autoComplete="off" placeholder="Search saved foods or enter something new" disabled={busy||pending}/></label>
+      {foods.length > 0 && <button type="button" className="text-button food-history-toggle" aria-expanded={historyOpen} aria-controls={historyId} disabled={pending||busy} onClick={()=>setHistoryOpen(!historyOpen)}>{historyOpen?"Hide saved foods":"Browse saved"}</button>}
+      {foods.length > 0 && historyOpen && <section id={historyId} className="food-history" aria-label="Previously logged foods and drinks">
+      <p className="muted small">{query.length ? `${matches.length} saved option${matches.length === 1 ? "" : "s"} · Choose one to fill macros, or keep typing a new food.` : "Frequently logged · Choose one to fill the name and macros."}</p>
       <ul className="food-history-list">{matches.slice(0,6).map(({entry,count})=><li key={entry.id}>
         <button type="button" disabled={pending||busy} onClick={()=>{
           setValues({name:entry.name,calories:String(entry.calories),protein:String(entry.protein),carbs:String(entry.carbs),fat:String(entry.fat)});
           setProvenance({estimated:entry.estimated,estimateNote:entry.estimateNote});
-          setEstimate(null);setError("");setReused(entry.name);
+          setEstimate(null);setError("");setReused(entry.name);setHistoryOpen(false);
         }}>
           <strong>{entry.name}</strong>
           <span>{entry.calories} kcal · {entry.protein}g protein · {entry.carbs}g carbs · {entry.fat}g fat</span>
           <small>Logged {count} {count === 1 ? "time" : "times"}{entry.estimated ? " · AI-assisted estimate" : ""}</small>
         </button>
       </li>)}</ul>
-      {matches.length === 0 && <p className="muted small">No matches yet. Try another name or add it below.</p>}
+      {matches.length === 0 && <p className="muted small">New food? Enter its macros below, or use an AI estimate.</p>}
       {matches.length > 6 && <p className="muted small">Showing 6 of {matches.length}. Narrow your search to find another.</p>}
-      {reused && <p className="food-reused" role="status">Filled from {reused}. Review the portion and macros below, then save.</p>}
     </section>}
+      {reused && <p className="food-reused" role="status">Filled from {reused}. Review the portion and macros below, then save.</p>}
+    </div>
     <label>When you ate{initial ? " (optional)" : ""}<input name="when" type="datetime-local" defaultValue={initialWhen} max={`${localDate()}T23:59`} required={!initial} disabled={pending||busy}/></label>
     <div className="meal-source"><label>Where was it from?<select value={source} onChange={e=>{setSource(e.target.value as ""|"home"|"away");setCost("");}} disabled={pending||busy}><option value="">Not tagged</option><option value="home">From home</option><option value="away">On the go / eating out</option></select></label>{source==="away"&&<label>Cost (USD, optional)<input type="number" min={0} max={10000} step="0.01" inputMode="decimal" value={cost} onChange={e=>setCost(e.target.value)} placeholder="e.g. 8.50" disabled={pending||busy}/></label>}<p className="muted small">{source==="home"?"Home meals are tagged separately; grocery costs aren’t tracked here.":source==="away"?"Leave the price blank if you don’t know it.":"Tag the meal when it’s useful. You can leave this untagged."}</p></div>
     <section className="food-assistant"><div className="card-heading"><h3><Sparkles size={17}/>Estimate with AI</h3><Camera size={18}/></div>
@@ -104,7 +111,6 @@ export default function FoodLog({date,entries,initial,aiEnabled,busy,onSave,onBu
     </section>
     {error&&<p className="error" role="alert">{error}</p>}
     {estimate&&<div className="estimate-note" role="status"><strong>Estimate · {estimate.confidence} confidence</strong><p>{estimate.assumptions}</p><span>Review the portion and edit any values before saving.</span></div>}
-    <label>What did you eat?<input name="name" value={values.name} onChange={e=>setValues({...values,name:e.target.value})} maxLength={200} required disabled={busy||pending}/></label>
     <div className="form-grid">{([['calories','Energy (kcal)'],['protein','Protein (g)'],['carbs','Carbs (g)'],['fat','Fat (g)']] as const).map(([key,label])=><label key={key}>{label}<input name={key} type="number" min={0} max={10000} step="any" required value={values[key]} onChange={e=>setValues({...values,[key]:e.target.value})} disabled={busy||pending}/></label>)}</div>
     <button className="primary full" disabled={busy||pending}>{busy?"Saving…":initial?"Save changes":"Save food"}<Check size={17}/></button>
   </form>;
