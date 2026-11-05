@@ -2,6 +2,21 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GET,POST } from "../app/api/insights/route";
 import { addEntry,deleteEntry,getData,saveSettings } from "../lib/db";
+import { insightContext } from "../lib/insights";
+import { defaults, type Entry } from "../lib/model";
+
+test("insight reflections preserve useful journal detail while bounding notes and respecting the selected range", () => {
+  const note = "A rushed lunch, then a calmer walk. ".repeat(50);
+  const entries: Entry[] = Array.from({ length: 26 }, (_, index) => ({
+    id: String(index), createdAt: "2026-11-03T20:00:00Z", kind: "journal",
+    date: "2026-11-03", occurredAt: `2026-11-03T20:${String(index).padStart(2, "0")}:00Z`, note
+  }));
+  entries.push({ id: "outside", createdAt: "2026-10-01T20:00:00Z", kind: "journal", date: "2026-10-01", occurredAt: "2026-10-01T20:00:00Z", note: "Outside selection" });
+  const context = insightContext({ mode: "trends", from: "2026-11-01", through: "2026-11-05", timeZone: "UTC", force: false }, entries, defaults);
+  assert.deepEqual(context.reflectionCoverage, { included: 24, omitted: 2 });
+  assert.equal(context.reflections[0].occurredAt, "2026-11-03T20:25:00Z");
+  assert.ok(context.reflections.every(reflection => reflection.text.length === 1200 && reflection.shortened && reflection.date === "2026-11-03"));
+});
 
 test("cards never call AI on GET, reuse cached output, and invalidate it when records or goals change",async()=>{
   const vars=["APP_PASSWORD","VERCEL","DATABASE_URL","DATABASE_AUTH_TOKEN","OPENAI_API_KEY"];
