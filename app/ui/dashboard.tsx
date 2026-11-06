@@ -16,7 +16,7 @@ import { AlcoholSpendingLog, AlcoholSpendCard } from "./alcohol-spending";
 
 type View = "Today" | "Alcohol & urges" | "Training" | "Nutrition" | "Wellbeing" | "Journal" | "All trends" | "Settings";
 type ModalKind = "food" | "lift" | "weight" | "checkin" | "start-day" | "mood" | "sleep" | "urge" | "coach" | "support" | "journal" | "purchase" | null;
-type EditableEntry = Extract<Entry, {kind: "food" | "weight" | "lift"}>;
+type EditableEntry = Extract<Entry, {kind: "food" | "weight" | "lift" | "checkin"}>;
 const navigation = [
   { name: "Today", icon: LayoutDashboard }, { name: "Alcohol & urges", icon: Coffee }, { name: "Training", icon: Dumbbell },
   { name: "Nutrition", icon: Utensils }, { name: "Wellbeing", icon: Heart }, { name: "Journal", icon: BookOpen }, { name: "All trends", icon: Activity }
@@ -123,9 +123,9 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
     if (modal === "start-day" && form.get("weight")) steps.push({ kind: "weight", date, weight: number("weight") });
     try {
       if (form.get("bedtime") || form.get("wakeTime")) {
-        steps.push({ kind: "checkin", date, ...sleepFromTimes(date, String(form.get("bedtime")), String(form.get("wakeTime"))) });
+        steps.push({ kind: "checkin", date: logDate, ...sleepFromTimes(logDate, String(form.get("bedtime")), String(form.get("wakeTime"))) });
       } else if (form.get("sleep")) {
-        steps.push({ kind: "checkin", date, sleep: number("sleep") });
+        steps.push({ kind: "checkin", date: logDate, sleep: number("sleep") });
       }
     } catch (error) {
       setError(error instanceof Error ? error.message : "Check the sleep times.");
@@ -189,6 +189,7 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
         <span className="record-date">{new Date(entry.date + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
         <div className="record-actions">
           {editable && <button className="icon-button" disabled={busy} aria-label={`Edit ${title}`} title="Edit entry" onClick={() => open(entry.kind, entry)}><Pencil size={16}/></button>}
+          {entry.kind === "checkin" && entry.sleep !== undefined && <button className="icon-button" disabled={busy} aria-label="Edit sleep" title="Edit sleep" onClick={() => open("sleep", entry)}><Pencil size={16}/></button>}
           <button className="icon-button delete" disabled={busy} aria-label={`Delete ${title}`} onClick={() => mutate({ action: "delete", id: entry.id }, "Entry removed.")}><Trash2 size={15}/></button>
         </div>
       </div>;
@@ -285,7 +286,7 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
           <label>Time of this mood<input name="when" type={modal === "start-day" ? "time" : "datetime-local"} defaultValue={modal === "start-day" ? localInputTime(date).slice(11) : localInputTime(date)} max={modal === "mood" ? `${localDate()}T23:59` : undefined} required={mood !== undefined}/></label>
         </>}
         {modal === "start-day" && !hasWeight && <Field label={`Body weight (${settings.unit}, optional)`} name="weight" type="number" min={0.1} max={1500} step="any"/>}
-        {(modal === "sleep" || (modal === "start-day" && checkin?.sleep === undefined)) && <SleepFields date={date} initial={checkin} optional={modal === "start-day"}/>}
+        {(modal === "sleep" || (modal === "start-day" && checkin?.sleep === undefined)) && <SleepFields date={logDate} initial={editing?.kind === "checkin" ? editing : checkin} optional={modal === "start-day"}/>}
 
         <button className="primary full" disabled={busy}>{busy ? "Saving…" : editing ? "Save changes" : "Save this small step"}<Check size={17}/></button>
       </form>}

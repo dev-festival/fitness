@@ -28,6 +28,27 @@ test("first check-in, later moods, drink totals, and edits share a day without o
   assert.equal(before.filter(e => e.kind === "mood").length, 2);
   assert.equal(before.find(e => e.kind === "checkin")?.bedAt, sleep.bedAt);
 
+  const originalCheckin = before.find(e => e.kind === "checkin")!;
+  const correctedSleep = { ...sleep, sleep: 7, wakeAt: `${date}T11:00:00Z` };
+  assert.equal((await save({ action: "start-day", entries: [correctedSleep] })).status, 200);
+  const corrected = (await getData()).entries;
+  const checkin = corrected.find(e => e.kind === "checkin")!;
+  assert.equal(checkin.id, originalCheckin.id);
+  assert.equal(checkin.drinks, 0);
+  assert.equal(checkin.sleep, 7);
+  assert.equal(checkin.wakeAt, correctedSleep.wakeAt);
+  assert.equal(dailyTrends(corrected, date, 1)[0].sleep, 7);
+  assert.equal(corrected.filter(e => e.kind === "checkin").length, 1);
+  assert.equal(corrected.filter(e => e.kind === "mood").length, 2);
+
+  // Switching to a duration clears old clock times while retaining other daily details.
+  assert.equal((await save({ action: "start-day", entries: [{ kind: "checkin", date, sleep: 6.5 }] })).status, 200);
+  const durationOnly = (await getData()).entries.find(e => e.kind === "checkin")!;
+  assert.equal(durationOnly.bedAt, undefined);
+  assert.equal(durationOnly.wakeAt, undefined);
+  assert.equal(durationOnly.sleep, 6.5);
+  assert.equal(durationOnly.drinks, 0);
+
   const weightId = before.find(e => e.kind === "weight")!.id;
   const food = { kind: "food", date, name: "Lunch", calories: 500, protein: 30, carbs: 45, fat: 20 };
   assert.equal((await save(food)).status, 200);
