@@ -142,3 +142,22 @@ input:not([type=range]):not([type=checkbox]),textarea,select{font-size:16px;min-
   .step-actions { padding: 14px 16px; }
   .small-steps > .card-heading { flex-wrap: wrap; }
 }
+
+.training-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
+.training-set-grid {
+  display: grid;
+  grid-template-columns: 2em minmax(0, 1fr) minmax(0, 1fr) 44px;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}
+.training-set-grid input { margin: 0; }
+.training-set-grid .training-remove { width: 44px; height: 44px; }
+.training-set-head { margin-top: 20px; font-size: 13px; color: var(--muted); }
+.training-fields .training-save { margin-top: 14px; }
+.training-heading { flex-wrap: wrap; }
+.training-action { padding: 16px 24px; }
+.training-history-day { margin-top: 24px; }
+.training-history-day .activity-card { margin-top: 12px; }
+.training-record-sets { margin: 6px 0 0; padding-left: 1.5em; color: var(--muted); font-size: 13px; }
+.training-record-sets li + li { margin-top: 3px; }

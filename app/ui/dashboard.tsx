@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Activity, ArrowDownToLine, ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, CircleHelp, Coffee, Dumbbell, Flame, Heart, LayoutDashboard, Leaf, LogOut, Menu, Moon, Plus, Scale, Send, Settings2, ShieldCheck, Sparkles, Sprout, Timer, Trash2, Utensils, Waves, X } from "lucide-react";
-import { dailyTotals, defaults, localDate, recentDates, type Entry, type EntryInput, type Settings } from "@/lib/model";
+import { dailyTotals, defaults, localDate, recentDates, type Entry, type EntryInput, type Settings, type Workout } from "@/lib/model";
 import { Pencil } from "lucide-react";
 import { buildCompanionContext, CONTEXT_DAYS } from "@/lib/companion";
 import FoodLog from "./food-log";
@@ -13,6 +13,7 @@ import { sleepFromTimes } from "@/lib/sleep";
 import type { HistorySnapshot } from "@/lib/history";
 import { eventTimeLabel, formatMoney, entryInstant, localInputTime } from "@/lib/money";
 import { AlcoholSpendingLog, AlcoholSpendCard } from "./alcohol-spending";
+import { LiftForm, TrainingLog } from "./training";
 
 type View = "Today" | "Alcohol & urges" | "Training" | "Nutrition" | "Wellbeing" | "Journal" | "All trends" | "Settings";
 type ModalKind = "food" | "lift" | "weight" | "checkin" | "start-day" | "mood" | "sleep" | "urge" | "coach" | "support" | "journal" | "purchase" | null;
@@ -27,6 +28,8 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
   const [view, setView] = useState<View>("Today");
   const [date, setDate] = useState(initialDate);
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [workouts, setWorkouts] = useState<Workout[]>([]);
+  const [loggingWorkout, setLoggingWorkout] = useState<Workout>();
   const [history, setHistory] = useState<HistorySnapshot[]>([]);
   const [auxBusy, setAuxBusy] = useState(false);
   const [settings, setSettings] = useState<Settings>(defaults);
@@ -52,7 +55,7 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
     const response = await fetch(`/api/data?date=${localDate()}`, { cache: "no-store" });
     const body = await response.json();
     if (!response.ok) throw new Error(body.error);
-    setEntries(body.entries); setHistory(body.history || []); setSettings(body.settings); setAiEnabled(body.aiEnabled); setLoaded(true);
+    setEntries(body.entries); setWorkouts(body.workouts ?? []); setHistory(body.history || []); setSettings(body.settings); setAiEnabled(body.aiEnabled); setLoaded(true);
   }
   useEffect(() => { setDate(localDate()); load().catch(error => setError(error.message)); }, []);
   useEffect(() => { window.scrollTo({top:0,behavior:"instant"}); }, [view]);
@@ -76,6 +79,8 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
   const weeklyCheckins = entries.filter(e => e.kind === "checkin" && e.drinks !== undefined && week.includes(e.date));
   const alcoholFree = weeklyCheckins.filter(e => e.kind === "checkin" && e.drinks === 0).length;
   const workoutDays = new Set(entries.filter(e => e.kind === "lift" && week.includes(e.date)).map(e => e.date)).size;
+  const lifts = entries.filter(e => e.kind === "lift");
+  const activeWorkout = workouts.find(workout => !workout.finishedAt);
   const weights = entries.filter(e => e.kind === "weight" && e.date <= date).sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
   const latestWeight = weights.at(-1);
   const displayDate = new Date(date + "T12:00:00");
@@ -95,9 +100,10 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
     } catch (error) { setError(error instanceof Error ? error.message : "Could not save."); return false; }
     finally { setBusy(false); }
   }
-  function open(kind: ModalKind, entry: EditableEntry | null = null) {
+  function open(kind: ModalKind, entry: EditableEntry | null = null, workout?: Workout) {
     setError("");
     setEditing(entry);
+    setLoggingWorkout(workout);
     setMood(undefined);
     setModal(kind);
   }
@@ -109,7 +115,6 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
   async function submitLog(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget);
     const number = (name: string) => Number(form.get(name));
-    if (modal === "lift") return saveEntry({ kind: "lift", date: logDate, name: String(form.get("name")), sets: number("sets"), reps: number("reps"), weight: number("weight") });
     if (modal === "weight") return saveEntry({ kind: "weight", date: logDate, weight: number("weight") });
     if (modal === "urge") return saveEntry({ kind: "urge", date, intensity, note: String(form.get("note")) });
     if (modal === "checkin") return saveEntry({ kind: "checkin", date, drinks: number("drinks") });
@@ -149,7 +154,7 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
     finally { setCoachBusy(false); }
   }
   function exportData() {
-    const url = URL.createObjectURL(new Blob([JSON.stringify({ version: 2, exportedAt: new Date().toISOString(), settings, entries, history }, null, 2)], { type: "application/json" }));
+    const url = URL.createObjectURL(new Blob([JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), settings, entries, workouts, history }, null, 2)], { type: "application/json" }));
     const a = document.createElement("a"); a.href = url; a.download = `steady-${localDate()}.json`; a.click(); URL.revokeObjectURL(url);
   }
   function recordList(items: Entry[], empty: string) {
@@ -165,7 +170,7 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
       let detail: string | null;
       switch (entry.kind) {
         case "food": detail = `${entry.calories} kcal · ${entry.protein}g protein · ${entry.carbs}g carbs · ${entry.fat}g fat${entry.estimated ? " · AI-assisted estimate" : ""}`; break;
-        case "lift": detail = `${entry.sets} × ${entry.reps} · ${entry.weight} ${settings.unit}`; break;
+        case "lift": detail = entry.setRows ? null : `${entry.sets} × ${entry.reps} · ${entry.weight} ${settings.unit}`; break;
         case "weight": detail = `${entry.weight} ${settings.unit}`; break;
         case "mood": detail = `${time} · ${moods[entry.mood - 1]}`; break;
         case "alcohol_purchase": detail = `${time} · ${formatMoney(entry.costCents)}`; break;
@@ -183,6 +188,9 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
         <div className="record-main">
           <strong>{title}</strong>
           {detail && <span>{detail}</span>}
+          {entry.kind === "lift" && entry.setRows && <ol className="training-record-sets">
+            {entry.setRows.map((set, index) => <li key={index}>{set.reps} reps × {set.weight} {settings.unit}</li>)}
+          </ol>}
           {entry.kind === "food" && <span className="food-entry-context">{time || "Time not recorded"} · {entry.source === "home" ? "From home" : entry.source === "away" ? "On the go" : "Not tagged"}{entry.costCents !== undefined ? ` · ${formatMoney(entry.costCents)}` : ""}</span>}
           {"note" in entry && entry.note && <p>{entry.note}</p>}
         </div>
@@ -218,7 +226,7 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
           <div className="section-title"><h2>Your day at a glance</h2><span>Small steps count.</span></div>
           <section className="stat-grid">
             <button className="stat-card" onClick={() => setView("Alcohol & urges")}><div className="stat-top"><span className="stat-icon sage"><Coffee size={18}/></span><span>Alcohol-free days<ArrowRight size={14}/></span></div><div className="stat-value">{alcoholFree}<small> / 7 days</small></div><div className="mini-days">{week.map(d => { const c = weeklyCheckins.find(e => e.date === d); return <span key={d} className={c?.kind === "checkin" ? c.drinks === 0 ? "free" : "logged" : ""} title={`${d}: ${c?.kind === "checkin" ? c.drinks + " drinks" : "not logged"}`}>{c?.kind === "checkin" && c.drinks === 0 ? <Check size={12}/> : new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "narrow" })}</span>; })}</div><p>Last 7 days · {weeklyCheckins.length} days logged</p></button>
-            <button className="stat-card" onClick={() => setView("Training")}><div className="stat-top"><span className="stat-icon apricot"><Dumbbell size={18}/></span><span>Training this week<ArrowRight size={14}/></span></div><div className="stat-value">{workoutDays}<small> / {settings.weeklyWorkouts} sessions</small></div><div className="progress-track"><i style={{ width: `${Math.min(100, workoutDays / settings.weeklyWorkouts * 100)}%`, background: "var(--orange)" }}/></div><p>Last 7 days · {workoutDays ? "Keep showing up for yourself." : "Your next session starts with showing up."}</p></button>
+            <button className="stat-card" onClick={() => setView("Training")}><div className="stat-top"><span className="stat-icon apricot"><Dumbbell size={18}/></span><span>Training this week<ArrowRight size={14}/></span></div><div className="stat-value">{workoutDays}<small> / {settings.weeklyWorkouts} days</small></div><div className="progress-track"><i style={{ width: `${Math.min(100, workoutDays / settings.weeklyWorkouts * 100)}%`, background: "var(--orange)" }}/></div><p>Last 7 days · {workoutDays ? "Keep showing up for yourself." : "Your next session starts with showing up."}</p></button>
             <button className="stat-card" onClick={() => open("food")}><div className="stat-top"><span className="stat-icon butter"><Flame size={18}/></span><span>Daily nourishment<Plus size={15}/></span></div><div className="stat-value">{totals.calories.toLocaleString()}<small> / {settings.calories.toLocaleString()} kcal</small></div><div className="progress-track"><i style={{ width: `${Math.min(100, totals.calories / settings.calories * 100)}%`, background: "var(--yellow)" }}/></div><p>{totals.protein}g protein · {totals.carbs}g carbs · {totals.fat}g fat</p></button>
             <button className="stat-card" onClick={() => open("weight")}><div className="stat-top"><span className="stat-icon lavender"><Scale size={18}/></span><span>Body weight<Plus size={15}/></span></div><div className="stat-value">{latestWeight?.kind === "weight" ? latestWeight.weight : "—"}<small> {settings.unit}</small></div><WeightSparkline weights={weights}/><p>{latestWeight ? `Last logged ${new Date(latestWeight.date + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : "A data point, not a judgment."}</p></button>
           </section>
@@ -238,7 +246,7 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
                 <button className="small-button" onClick={() => open("food")}><Plus size={14}/>Food</button>
                 <button className="small-button" onClick={() => open("journal")}><Plus size={14}/>Thought</button>
                 {!firstCheckin && <button className="small-button" onClick={() => open("mood")}><Plus size={14}/>Mood</button>}
-                <button className="small-button" onClick={() => open("lift")}><Plus size={14}/>Training</button>
+                <button className="small-button" onClick={() => open("lift", null, activeWorkout?.date === date ? activeWorkout : undefined)}><Plus size={14}/>Training</button>
               </div>
             </div>
             {recordList(today, "A fresh page for your day.")}
@@ -247,7 +255,10 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
 
         {view === "Alcohol & urges" && <><AlcoholSpendCard entries={entries.filter(e=>week.includes(e.date))} onNew={()=>open("purchase")}/><div className="two-column"><section className="card padded"><div className="card-heading"><h2>The last seven days</h2><Coffee size={20}/></div><div className="large-number">{alcoholFree}<span> alcohol-free days logged</span></div><p className="muted">Only days with a drink total are counted.</p><div className="week-grid">{week.map(d => { const c = weeklyCheckins.find(e => e.date === d); return <button key={d} onClick={() => setDate(d)} className={d === date ? "selected" : ""}><span>{new Date(d + "T12:00:00").toLocaleDateString("en-US", { weekday: "short" })}</span><strong>{c?.kind === "checkin" ? c.drinks === 0 ? <Check size={21}/> : c.drinks : "—"}</strong><small>{c?.kind === "checkin" ? c.drinks === 0 ? "alcohol-free" : "drinks" : "not logged"}</small></button>; })}</div><button className="secondary" onClick={() => open("checkin")}>Log or update drinks<Plus size={16}/></button></section><section className="card reason-card"><Sprout size={27}/><span className="eyebrow">YOUR WHY</span><h2>{settings.reason || "What do you want more room for in your life?"}</h2><button className="text-button" onClick={() => setView("Settings")}>Make it personal<ArrowRight size={15}/></button></section></div><section className="card activity-card"><div className="card-heading"><h2>Check-ins & moments</h2><button className="small-button" onClick={() => open("urge")}><Plus size={14}/>Log an urge</button></div>{recordList(entries.filter(e => (e.kind === "checkin" || e.kind === "urge" || e.kind === "alcohol_purchase") && e.date <= date), "Your story can start with one check-in.")}</section></>}
 
-        {view === "Training" && <><div className="section-title"><h2>Training log</h2><button className="primary" onClick={() => open("lift")}><Plus size={17}/>Log an exercise</button></div><div className="summary-strip"><div><Dumbbell size={22}/><strong>{workoutDays}<span> sessions in the last 7 days</span></strong></div><p>Log exercises with the same date to build a session.<br/>Weights are in {settings.unit}; use 0 for bodyweight work.</p></div><section className="card activity-card"><div className="card-heading"><h2>{isToday ? "Today’s work" : "This day’s work"}</h2><span className="muted">Sets × reps · {settings.unit}</span></div>{recordList(today.filter(e => e.kind === "lift"), "Your next small win is waiting.")}</section><section className="card activity-card"><div className="card-heading"><h2>Previous sessions</h2></div>{recordList(entries.filter(e => e.kind === "lift" && e.date < date), "Your training history will grow here.")}</section></>}
+        {view === "Training" && <TrainingLog lifts={lifts} workouts={workouts} active={activeWorkout} date={date} trainingDays={workoutDays} busy={busy}
+          onStart={() => mutate({ action: "start-workout", id: crypto.randomUUID(), date: localDate() }, "Workout started.")}
+          onFinish={id => mutate({ action: "finish-workout", id }, "Workout finished.")}
+          onLog={workout => open("lift", null, workout)} renderLifts={recordList}/>}
 
         {view === "Nutrition" && <><div className="section-title"><h2>Nourishment, without the noise</h2><button className="primary" onClick={() => open("food")}><Plus size={17}/>Log food</button></div><div className="nutrition-grid">{(["calories", "protein", "carbs", "fat"] as const).map((key, i) => <section className="card macro-card" key={key}><span className="eyebrow">{key === "calories" ? "ENERGY" : key.toUpperCase()}</span><h2>{totals[key].toLocaleString()}<small> / {settings[key]}{key === "calories" ? " kcal" : "g"}</small></h2><div className="progress-track"><i style={{ width: `${Math.min(100, totals[key] / settings[key] * 100)}%`, background: ["#d6ad61", "#628b71", "#9b91ad", "#cd957b"][i] }}/></div></section>)}</div><p className="muted subnote">Edit your goals in preferences. Log values from food labels or your own estimates.</p><section className="card activity-card"><div className="card-heading"><h2>On your plate</h2></div>{recordList(today.filter(e => e.kind === "food"), "Start with your next meal or snack.")}</section></>}
 
@@ -261,7 +272,7 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
           const unit = data.get("unit");
           if (unit !== settings.unit && entries.some(e => e.kind === "weight" || e.kind === "lift")) { setError("Your existing weights use " + settings.unit + ". Keep that unit to preserve your history. Unit conversion isn’t available yet."); return; }
           await mutate({ action: "settings", settings: { name: data.get("name"), reason: data.get("reason"), unit, calories: Number(data.get("calories")), protein: Number(data.get("protein")), carbs: Number(data.get("carbs")), fat: Number(data.get("fat")), weeklyWorkouts: Number(data.get("weeklyWorkouts")) } }, "Preferences saved.");
-        }}><section className="card padded"><h2>The personal part</h2><div className="form-grid"><Field label="What should we call you?" name="name" defaultValue={settings.name} maxLength={40}/><label>Weight unit<select name="unit" defaultValue={settings.unit}><option value="lb">Pounds (lb)</option><option value="kg">Kilograms (kg)</option></select></label></div><label>Your reason to keep going<textarea name="reason" defaultValue={settings.reason} maxLength={500} rows={3}/></label></section><section className="card padded"><h2>Your reference goals</h2><p className="muted">Start with goals that fit your routine. You can adjust them as you go.</p><div className="form-grid"><Field label="Energy (kcal / day)" name="calories" type="number" min={1} max={10000} defaultValue={settings.calories}/><Field label="Protein (g / day)" name="protein" type="number" min={1} max={1000} step="any" defaultValue={settings.protein}/><Field label="Carbs (g / day)" name="carbs" type="number" min={1} max={1000} step="any" defaultValue={settings.carbs}/><Field label="Fat (g / day)" name="fat" type="number" min={1} max={1000} step="any" defaultValue={settings.fat}/><Field label="Training sessions / week" name="weeklyWorkouts" type="number" min={1} max={14} defaultValue={settings.weeklyWorkouts}/></div><button className="primary" disabled={busy}>{busy ? "Saving…" : "Save preferences"}<Check size={16}/></button></section><section className="card padded"><h2>Your data belongs to you.</h2><p className="muted">Records live in your SQLite database. Export a personal backup at any time. When you message your companion, you can include recent logs and compact snapshots of older history. Turn off “Use my app history” to send just your message.</p><button type="button" className="secondary" onClick={exportData}><ArrowDownToLine size={16}/>Export all data</button><div className="connection-status"><span className={aiEnabled ? "status-dot on" : "status-dot"}/>{aiEnabled ? "AI companion connected" : "AI companion is off"}</div><p className="muted small">{aiEnabled ? "API key is configured on your server. Messages are processed by OpenAI." : "To connect, set OPENAI_API_KEY in your server environment. See README.md for setup."}</p></section></form>}
+        }}><section className="card padded"><h2>The personal part</h2><div className="form-grid"><Field label="What should we call you?" name="name" defaultValue={settings.name} maxLength={40}/><label>Weight unit<select name="unit" defaultValue={settings.unit}><option value="lb">Pounds (lb)</option><option value="kg">Kilograms (kg)</option></select></label></div><label>Your reason to keep going<textarea name="reason" defaultValue={settings.reason} maxLength={500} rows={3}/></label></section><section className="card padded"><h2>Your reference goals</h2><p className="muted">Start with goals that fit your routine. You can adjust them as you go.</p><div className="form-grid"><Field label="Energy (kcal / day)" name="calories" type="number" min={1} max={10000} defaultValue={settings.calories}/><Field label="Protein (g / day)" name="protein" type="number" min={1} max={1000} step="any" defaultValue={settings.protein}/><Field label="Carbs (g / day)" name="carbs" type="number" min={1} max={1000} step="any" defaultValue={settings.carbs}/><Field label="Fat (g / day)" name="fat" type="number" min={1} max={1000} step="any" defaultValue={settings.fat}/><Field label="Training days / week" name="weeklyWorkouts" type="number" min={1} max={14} defaultValue={settings.weeklyWorkouts}/></div><button className="primary" disabled={busy}>{busy ? "Saving…" : "Save preferences"}<Check size={16}/></button></section><section className="card padded"><h2>Your data belongs to you.</h2><p className="muted">Records live in your SQLite database. Export a personal backup at any time. When you message your companion, you can include recent logs and compact snapshots of older history. Turn off “Use my app history” to send just your message.</p><button type="button" className="secondary" onClick={exportData}><ArrowDownToLine size={16}/>Export all data</button><div className="connection-status"><span className={aiEnabled ? "status-dot on" : "status-dot"}/>{aiEnabled ? "AI companion connected" : "AI companion is off"}</div><p className="muted small">{aiEnabled ? "API key is configured on your server. Messages are processed by OpenAI." : "To connect, set OPENAI_API_KEY in your server environment. See README.md for setup."}</p></section></form>}
         </>}
         <footer className="page-footer"><span><Sprout size={15}/>Built for a person. Not a perfect person.</span></footer>
       </div>
@@ -273,9 +284,16 @@ export default function Dashboard({ hasPassword, initialDate }: { hasPassword: b
       {modal === "food" && <FoodLog date={logDate} entries={entries} initial={editing?.kind === "food" ? editing : undefined} aiEnabled={aiEnabled} busy={busy} onBusyChange={setAuxBusy} onSave={saveEntry}/>}
       {modal === "purchase" && <AlcoholSpendingLog date={date} busy={busy} onSave={async entry=>{const saved=await mutate(entry,"Purchase saved.");if(saved)setModal(null);return saved;}}/>}
       {modal === "journal" && <JournalLog date={date} aiEnabled={aiEnabled} busy={busy} onBusyChange={setAuxBusy} onSave={async entry=>{const saved=await mutate(entry,"Thought saved.");if(saved)setModal(null);return saved;}}/>}
-      {(modal === "lift" || modal === "weight" || modal === "checkin" || modal === "start-day" || modal === "mood" || modal === "sleep") && <form onSubmit={submitLog} key={modal}>
+      {modal === "lift" && <LiftForm initial={editing?.kind === "lift" ? editing : undefined}
+        lifts={lifts} date={loggingWorkout?.date ?? logDate} workoutId={editing?.kind === "lift" ? editing.workoutId : loggingWorkout?.id}
+        unit={settings.unit} busy={busy} onSave={async (entry, id) => {
+          if (editing) return saveEntry(entry);
+          const saved = await mutate({ action: "add-lift", id, entry }, "Exercise saved.");
+          if (saved) setModal(null);
+          return saved;
+        }}/>}
+      {(modal === "weight" || modal === "checkin" || modal === "start-day" || modal === "mood" || modal === "sleep") && <form onSubmit={submitLog} key={modal}>
         <p className="muted modal-date">{editing ? "Editing entry for" : "Logging for"} {new Date(logDate + "T12:00:00").toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</p>
-        {modal === "lift" && <><Field label="Exercise" name="name" placeholder="e.g. Barbell squat" defaultValue={editing?.kind === "lift" ? editing.name : undefined} required maxLength={200}/><div className="form-grid"><Field label="Sets" name="sets" type="number" min={1} max={100} defaultValue={editing?.kind === "lift" ? editing.sets : 3} required/><Field label="Reps per set" name="reps" type="number" min={1} max={1000} defaultValue={editing?.kind === "lift" ? editing.reps : 8} required/><Field label={`Weight (${settings.unit})`} name="weight" type="number" min={0} max={10000} step="any" defaultValue={editing?.kind === "lift" ? editing.weight : undefined} required/></div><p className="muted small">Different weights or reps? Save separate entries. Use 0 for bodyweight work.</p></>}
         {modal === "weight" && <><Field label={`Body weight (${settings.unit})`} name="weight" type="number" min={0.1} max={1500} step="any" defaultValue={editing?.kind === "weight" ? editing.weight : undefined} required/><p className="muted">This is information, not a measure of your worth.</p></>}
         {modal === "checkin" && <Field label="Total drinks for this date" name="drinks" type="number" min={0} max={100} defaultValue={checkin?.drinks} required/>}
         {(modal === "mood" || modal === "start-day") && <>

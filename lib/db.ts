@@ -2,7 +2,7 @@ import { createClient, type Client } from "@libsql/client";
 import { mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { buildHistorySnapshots } from "./history";
-import { defaults, type Entry, type EntryInput, type Settings } from "./model";
+import { defaults, type Entry, type EntryInput, type Settings, type Workout } from "./model";
 
 let client: Client | undefined;
 let initialized: Promise<void> | undefined;
@@ -20,6 +20,8 @@ async function ready() {
     "CREATE TABLE IF NOT EXISTS entries (id TEXT PRIMARY KEY, kind TEXT NOT NULL, date TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS entries_date ON entries(date)",
     "CREATE UNIQUE INDEX IF NOT EXISTS one_checkin_per_day ON entries(date) WHERE kind = 'checkin'",
+    "CREATE TABLE IF NOT EXISTS workouts (id TEXT PRIMARY KEY, date TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS one_active_workout ON workouts((1)) WHERE finished_at IS NULL",
     "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id = 1), payload TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS history_snapshots (period_start TEXT PRIMARY KEY, source_hash TEXT NOT NULL, payload TEXT NOT NULL, updated_at TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS companion_cards (cache_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, payload TEXT NOT NULL)"
@@ -38,8 +40,50 @@ export async function getData(range?: { start: string; end: string }) {
     settings: settings.rows.length ? { ...defaults, ...JSON.parse(String(settings.rows[0].payload)) } as Settings : defaults
   };
 }
+export async function getWorkouts(): Promise<Workout[]> {
+  const db = await ready();
+  const { rows } = await db.execute("SELECT * FROM workouts ORDER BY date DESC, started_at DESC");
+  return rows.map(row => ({
+    id: String(row.id),
+    date: String(row.date),
+    startedAt: String(row.started_at),
+    finishedAt: row.finished_at === null ? null : String(row.finished_at)
+  }));
+}
+export async function startWorkout(id: string, date: string) {
+  const db = await ready();
+  await db.execute({
+    sql: "INSERT INTO workouts (id,date,started_at) VALUES (?,?,?) ON CONFLICT DO NOTHING",
+    args: [id, date, new Date().toISOString()]
+  });
+}
+export async function finishWorkout(id: string) {
+  const db = await ready();
+  await db.execute({
+    sql: "UPDATE workouts SET finished_at = max(started_at, ?) WHERE id = ? AND finished_at IS NULL",
+    args: [new Date().toISOString(), id]
+  });
+}
 export async function addEntry(input: EntryInput) {
   await addEntries([input]);
+}
+export async function addLift(id: string, input: Extract<EntryInput, {kind: "lift"}>) {
+  const db = await ready();
+  const payload = JSON.stringify(input);
+  const [, saved] = await db.batch([
+    {
+      sql: `INSERT INTO entries (id,kind,date,payload,created_at)
+            SELECT ?, 'lift', ?, ?, ?
+            WHERE ? IS NULL OR EXISTS (
+              SELECT 1 FROM workouts WHERE id = ? AND date = ? AND finished_at IS NULL
+            )
+            ON CONFLICT(id) DO NOTHING`,
+      args: [id, input.date, payload, new Date().toISOString(), input.workoutId ?? null, input.workoutId ?? null, input.date]
+    },
+    { sql: "SELECT 1 FROM entries WHERE id = ? AND payload = ?", args: [id, payload] },
+    "DELETE FROM companion_cards"
+  ], "write");
+  return saved.rows.length > 0;
 }
 export async function addEntries(inputs: EntryInput[]) {
   const db = await ready();
@@ -59,8 +103,14 @@ export async function addEntries(inputs: EntryInput[]) {
 }
 export async function updateEntry(id: string, input: Extract<EntryInput, {kind: "food" | "weight" | "lift"}>) {
   const db = await ready();
+  const update = input.kind === "lift"
+    ? {
+        sql: "UPDATE entries SET date = ?, payload = ? WHERE id = ? AND kind = 'lift' AND json_extract(payload, '$.workoutId') IS ? AND (? IS NULL OR date = ?)",
+        args: [input.date, JSON.stringify(input), id, input.workoutId ?? null, input.workoutId ?? null, input.date]
+      }
+    : { sql: "UPDATE entries SET date = ?, payload = ? WHERE id = ? AND kind = ?", args: [input.date, JSON.stringify(input), id, input.kind] };
   const [result] = await db.batch([
-    { sql: "UPDATE entries SET date = ?, payload = ? WHERE id = ? AND kind = ?", args: [input.date, JSON.stringify(input), id, input.kind] },
+    update,
     "DELETE FROM companion_cards"
   ], "write");
   return result.rowsAffected > 0;

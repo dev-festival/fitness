@@ -12,16 +12,25 @@ export const timeZoneSchema = z.string().min(1).max(80).refine(value=>{
   try { new Intl.DateTimeFormat("en-US",{timeZone:value}).format();return true; } catch {return false;}
 },"Choose a valid time zone");
 const money = z.number().int().min(0).max(1000000);
-export const entrySchema = z.discriminatedUnion("kind", [
+const liftFields = { kind: z.literal("lift"), date: dateSchema, name: text };
+const reps = z.number().int().min(1).max(1000);
+const setSchema = z.object({ reps, weight: amount });
+export const setLiftSchema = z.object({
+  ...liftFields,
+  setRows: z.array(setSchema).min(1).max(100),
+  workoutId: z.uuid().optional()
+});
+const datedEntrySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("food"), date: dateSchema, name: text, calories: amount, protein: amount, carbs: amount, fat: amount, occurredAt:timestamp.optional(),timeZone:timeZoneSchema.optional(),source:z.enum(["home","away"]).optional(),costCents:money.optional(),estimated: z.boolean().optional(), estimateNote: z.string().max(500).optional() }),
   z.object({ kind:z.literal("alcohol_purchase"),date:dateSchema,occurredAt:timestamp,timeZone:timeZoneSchema.optional(),name:text,costCents:money }),
-  z.object({ kind: z.literal("lift"), date: dateSchema, name: text, sets: z.number().int().min(1).max(100), reps: z.number().int().min(1).max(1000), weight: amount }),
+  z.object({ ...liftFields, sets: z.number().int().min(1).max(100), reps, weight: amount, setRows: z.never().optional(), workoutId: z.never().optional() }),
   z.object({ kind: z.literal("weight"), date: dateSchema, weight: z.number().finite().positive().max(1500) }),
   z.object({ kind: z.literal("checkin"), date: dateSchema, drinks: z.number().int().min(0).max(100).optional(), mood: z.number().int().min(1).max(5).optional(), sleep: z.number().finite().min(0).max(24).optional(), bedAt: timestamp.optional(), wakeAt: timestamp.optional(), note: z.string().trim().max(2000).optional() }),
   z.object({ kind: z.literal("mood"), date: dateSchema, occurredAt: timestamp, timeZone: timeZoneSchema.optional(), mood: z.number().int().min(1).max(5) }),
   z.object({ kind: z.literal("journal"), date: dateSchema, occurredAt: timestamp,timeZone:timeZoneSchema.optional(), note: z.string().trim().min(1).max(4000), sentiment: sentimentSchema.optional() }),
   z.object({ kind: z.literal("urge"), date: dateSchema, intensity: z.number().int().min(1).max(5), note: z.string().trim().max(2000) })
-]).superRefine((entry, context) => {
+]);
+export const entrySchema = z.union([datedEntrySchema, setLiftSchema]).superRefine((entry, context) => {
   if(entry.kind === "food" && entry.costCents !== undefined && entry.source !== "away") context.addIssue({code:"custom",message:"Assign spending to on-the-go food only",path:["costCents"]});
   if (entry.kind !== "checkin") return;
   if (entry.drinks === undefined && entry.sleep === undefined && entry.mood === undefined && !entry.note) context.addIssue({ code: "custom", message: "Add a daily detail" });
@@ -33,6 +42,8 @@ export const entrySchema = z.discriminatedUnion("kind", [
 });
 export type EntryInput = z.infer<typeof entrySchema>;
 export type Entry = EntryInput & { id: string; createdAt: string };
+export type Lift = Extract<Entry, {kind: "lift"}>;
+export type Workout = { id: string; date: string; startedAt: string; finishedAt: string | null };
 export const settingsSchema = z.object({
   name: z.string().trim().max(40),
   reason: z.string().trim().max(500),

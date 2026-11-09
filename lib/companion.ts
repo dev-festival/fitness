@@ -4,11 +4,13 @@ import { spendingSummary,eventTimeLabel,entryInstant } from "./money";
 import { combinedObservations,mealThoughtLinks } from "./observations";
 import { buildHistorySnapshots } from "./history";
 import { mean, summarizeEntries } from "./trends";
+import { liftSetCount } from "./training";
 
 export const CONTEXT_DAYS = 14;
 const MAX_NOTES = 12;
 const MAX_NOTE_LENGTH = 300;
 const MAX_EXERCISES = 40;
+const MAX_SETS_PER_EXERCISE = 20;
 export const companionRequestSchema = z.object({
   message: z.string().trim().min(1).max(3000),
   includeRecentData: z.boolean().default(false),
@@ -63,12 +65,14 @@ export function buildCompanionContext(entries: Entry[], settings: Settings, refe
         moodMoments: day.filter(e => e.kind === "mood").slice(0, 12).map(e => ({ mood: e.mood, localTime: eventTimeLabel(e, timeZone) })),
         journalTone:mean(day.flatMap(e=>e.kind === "journal" && e.sentiment ? [e.sentiment.score]:[])),
         nutritionLogged: dayFood.length ? { entries: dayFood.length, ...dailyTotals(dayFood, date) } : null,
-        training: dayLifts.length ? { exercisesLogged: dayLifts.length, sets: dayLifts.reduce((sum, e) => sum + (e.kind === "lift" ? e.sets : 0), 0) } : null,
+        training: dayLifts.length ? { exercisesLogged: dayLifts.length, sets: dayLifts.reduce((sum, e) => sum + liftSetCount(e), 0) } : null,
         weights: day.flatMap(e => e.kind === "weight" ? [e.weight] : []),
         urgeIntensities: day.flatMap(e => e.kind === "urge" ? [e.intensity] : [])
       };
     }),
-    recentExercises: lifts.slice(0, MAX_EXERCISES).flatMap(e => e.kind === "lift" ? [{ date: e.date, name: e.name, sets: e.sets, reps: e.reps, weight: e.weight }] : []),
+    recentExercises: lifts.slice(0, MAX_EXERCISES).map(e => e.setRows
+      ? { date: e.date, name: e.name, sets: e.setRows.length, setRows: e.setRows.slice(0, MAX_SETS_PER_EXERCISE), omittedSets: Math.max(0, e.setRows.length - MAX_SETS_PER_EXERCISE) }
+      : { date: e.date, name: e.name, sets: e.sets, reps: e.reps, weight: e.weight }),
     recentNotes: notes.slice(0, MAX_NOTES),
     recentMeals:food.slice(0,40).flatMap(e=>e.kind==="food"?[{date:e.date,name:e.name,occurredAt:e.occurredAt??null,localTime:eventTimeLabel(e,timeZone),source:e.source??null,costCents:e.costCents??null,calories:e.calories,protein:e.protein,carbs:e.carbs,fat:e.fat}]:[]),
     recentAlcoholPurchases:recent.filter(e=>e.kind==="alcohol_purchase").slice(0,20).flatMap(e=>e.kind==="alcohol_purchase"?[{date:e.date,name:e.name,localTime:eventTimeLabel(e,timeZone),costCents:e.costCents}]:[]),

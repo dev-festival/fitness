@@ -1,5 +1,6 @@
 import { dailyTotals, recentDates, type Entry } from "./model";
 import { spendingSummary } from "./money";
+import { liftSetCount, liftVolume } from "./training";
 
 export const mean = (values: number[]) => values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length * 100) / 100 : null;
 export function dailyMoods(entries: Entry[]) {
@@ -37,8 +38,8 @@ export function summarizeEntries(entries: Entry[]) {
     averageMood: mean([...dailyMoods(entries).values()]),
     foodDays, foodTotals: sums,
     trainingDays: new Set(lifts.map(e => e.date)).size,
-    sets: lifts.reduce((n,e) => n+(e.kind === "lift" ? e.sets : 0),0),
-    trainingVolume: lifts.reduce((n,e) => n+(e.kind === "lift" ? e.sets*e.reps*e.weight : 0),0),
+    sets: lifts.reduce((n,e) => n + liftSetCount(e),0),
+    trainingVolume: lifts.reduce((n,e) => n + liftVolume(e),0),
     weightReadings: weights.length,
     firstWeight: weights[0]?.kind === "weight" ? { date:weights[0].date, value:weights[0].weight } : null,
     lastWeight: weights.at(-1)?.kind === "weight" ? { date:weights.at(-1)!.date, value:(weights.at(-1) as Extract<Entry,{kind:"weight"}>).weight } : null,
